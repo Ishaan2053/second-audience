@@ -37,6 +37,25 @@ Surprises found while building, with evidence. The Flagsmith questions are answe
     can expose over REST.
   - **Weekly pause.** Free projects pause after a week of inactivity.
 
+## Experiment client (SA-06)
+
+- **A new variant takes a few seconds to reach the SDK API.** Straight after
+  `flagsmith feature variant add`, identity evaluations still returned the flag as
+  `reason=STATIC` with `variant=None` for several seconds before they returned
+  `SPLIT; weight=50.0` with a variant key. Once the split is live, control identities carry
+  `variant="control"` (reason `STATIC`), so `variant is not None` is the signal. The network
+  test polls for it (about 10 s in practice) before resolving its identities.
+- **With a `default_flag_handler`, SDK failures do not raise.** `get_identity_flags` catches
+  `FlagsmithAPIError` and returns the handler's `DefaultFlag`, and a missing flag returns it
+  too. The client treats any `DefaultFlag` as "not in the experiment", as well as raised
+  exceptions.
+- **The SDK retries failed connections three times by default**
+  (`Retry(total=3, backoff_factor=0.1)`), so one unreachable-host call cost four timeouts.
+  The client passes `Retry(total=1)`; against a closed local port with a 1 s timeout,
+  `style_for` returned the control style in 2.0 s. urllib3 does not retry read timeouts on
+  `POST` (the identities endpoint) by default.
+- **`request_timeout_seconds` is typed `int`**, so the setting is an integer.
+
 ## Flagsmith spike (SA-02)
 
 Run on 2026-11-26 against the `Development` environment of project `second-audience`

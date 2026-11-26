@@ -82,6 +82,7 @@ One `Settings` class, validated at start-up. Missing required values fail fast w
 | `SA_ENV` | all | `dev`, `test` or `prod` |
 | `FLAGSMITH_ENVIRONMENT_KEY` | server | SDK key for the Flagsmith environment |
 | `FLAGSMITH_API_URL` | server | optional override |
+| `FLAGSMITH_REQUEST_TIMEOUT_SECONDS` | server | per-request timeout, default 2; one retry, then the control style |
 | `SA_FLAG_NAME` | server | default `error_style` |
 | `SA_DATABASE_URL` | server, operator, lab | ledger; default `sqlite:///./sa.db`; Postgres as `postgresql+psycopg://...` |
 | `GEMINI_API_KEY` | lab, operator | model access |
@@ -249,19 +250,31 @@ class ExperimentClient(Protocol):
     def flush(self) -> None: ...
 ```
 
-- `style_for` is called the first time a session needs a styled error. It resolves the
-  flag for the identity `session_id`, which also records the exposure, and caches the
-  result on the session. Returns the style and the variant key.
+- `style_for` is called the first time a session needs a styled error. One SDK call,
+  `get_experiment_flag(flag, identifier=session_id)`, resolves the flag and records the
+  exposure. The result is cached per session in a bounded LRU (4,096 sessions), so repeated
+  calls neither re-evaluate nor re-expose. Returns the style and the variant key.
 - **Lazy exposure. Why:** a session that never hits a styled error is unaffected by the
   variant; counting it would dilute the result. Whether a session reaches its first styled
   error does not depend on the arm, so this keeps the comparison valid.
-  **Alternative considered:** exposure at `begin_task`; simpler, kept as the fallback if
-  the SDK makes lazy evaluation awkward.
-- If Flagsmith is unreachable, the client returns the control style with variant `None`,
-  and the ledger marks the session `in_experiment = false`.
+  **Alternative considered:** exposure at `begin_task`; simpler, but not needed: the SDK
+  makes lazy exposure a single call (SA-02).
+- The variant key is set only while the identity is enrolled in a running experiment. A
+  flag outside an experiment (for example after `sa ship` rolls out a winner) still serves
+  its style, with variant `None`.
+- If Flagsmith fails (exception, timeout, or the SDK's default flag), the client returns
+  the control style with variant `None`, logs once, and caches that for the session, so a
+  session never switches style mid-task. The ledger marks it `in_experiment = false`.
+  Requests time out after `FLAGSMITH_REQUEST_TIMEOUT_SECONDS` (default 2) with one retry,
+  so an outage costs a tool call about two timeouts at most.
 - Events: `task_completed` when the outcome is `correct`; `task_wrong_booking` when it is
-  `incorrect`. Sent only for sessions that were exposed.
-- A `NullExperimentClient` with a fixed style is used in tests and offline runs.
+  `incorrect`. The caller sends them only for sessions that were exposed (Flagsmith also
+  ignores events from identities with no exposure). `track` never raises on delivery
+  failures; an unknown event name raises `ValueError`. `flush` blocks until buffered events
+  are delivered; the server calls it after each `finish_task` and on shutdown, the lab
+  runner at the end of a batch.
+- A `NullExperimentClient` with a fixed style is used in tests and offline runs; it records
+  every call.
 
 Exact SDK method names, the events flag and minimum versions are confirmed in SA-02 and
 recorded in `docs/spike-findings.md`.
