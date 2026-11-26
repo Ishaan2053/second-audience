@@ -173,12 +173,17 @@ class World:
             if booking.status == "active" and created_by in (None, booking.created_by)
         ]
 
-    def free_slots(self, room_id: str, day: date) -> list[tuple[time, time]]:
-        """Maximal free intervals of a room on a day, within its opening hours."""
+    def free_slots(
+        self, room_id: str, day: date, ignore: str | None = None
+    ) -> list[tuple[time, time]]:
+        """Maximal free intervals of a room on a day, within its opening hours.
+
+        `ignore` treats one booking as absent, as a reschedule of that booking would.
+        """
         room = self.room(room_id)
         _check_date(day)
         taken = sorted(
-            (booking.start, booking.end) for booking in self._active_in(room_id, day, None)
+            (booking.start, booking.end) for booking in self._active_in(room_id, day, ignore)
         )
         slots: list[tuple[time, time]] = []
         cursor = room.opens
