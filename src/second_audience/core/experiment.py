@@ -107,6 +107,15 @@ class FlagsmithExperimentClient:
         )
         return cls(sdk, settings.sa_flag_name)
 
+    def reachable(self) -> bool:
+        """Whether Flagsmith answers an environment flags request and serves the flag.
+
+        The SDK swallows API errors and serves the default handler's flag, so a real `Flag`
+        is the evidence of a successful request. No identity is involved, so no exposure.
+        """
+        flag = self._sdk.get_environment_flags().get_flag(self._flag_name)
+        return isinstance(flag, Flag)
+
     def style_for(self, session_id: str, traits: Traits | None = None) -> Assignment:
         """Resolve the flag once per session, record the exposure, and cache the result."""
         with self._lock:

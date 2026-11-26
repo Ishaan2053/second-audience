@@ -532,3 +532,18 @@ and `gemini-2.5-pro` start auto-routing to newer models on 2026-12-01, after the
   prescriptive style, or `{"rollout_decision": "control"}` to keep the informative style.
   It is irreversible, so the approval prompt must say so. Afterwards, refresh once and
   confirm `is_final`.
+- **SA-10 (field hardening), found while building it.**
+  - FastMCP 4.2.6 mounts extra HTTP routes with `@mcp.custom_route(path, methods=[...])`
+    on the same Starlette app as `/mcp`; they are served only over HTTP. `get_http_request()`
+    raises `RuntimeError` under stdio, so the client IP is optional there and only the kill
+    switch and the session cap apply.
+  - Uvicorn's access log prints every client address, so `main` passes
+    `uvicorn_config={"access_log": False, "proxy_headers": False}`. Forwarded headers are
+    read only by `limits.client_ip`, under `SA_TRUST_PROXY`.
+  - The Flagsmith SDK never raises on an API failure when a default flag handler is set: it
+    serves the default. `/healthz` therefore treats a real `Flag` (not `DefaultFlag`) for
+    `error_style` from `get_environment_flags()` as proof that Flagsmith answered.
+  - **For SA-11:** the client IP is the leftmost `X-Forwarded-For` entry. That is the real
+    client behind any number of proxy hops, but a client can prepend a fake value to dodge
+    the per-IP limit; the global session cap still bounds the load. Check on the host that
+    field sessions from two networks get two different `client_ip_hash` values in the ledger.

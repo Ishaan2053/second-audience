@@ -24,6 +24,10 @@ ALL_VARS = (
     "SA_MAX_TOOL_CALLS",
     "SA_SESSION_IDLE_SECONDS",
     "SA_FIELD_SESSIONS_PER_IP_PER_HOUR",
+    "SA_FIELD_ENABLED",
+    "SA_MAX_CONCURRENT_SESSIONS",
+    "SA_TRUST_PROXY",
+    "SA_GIT_COMMIT",
 )
 
 PROD_VARS = {
@@ -57,6 +61,10 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.sa_max_tool_calls == 12
     assert settings.sa_session_idle_seconds == 600
     assert settings.sa_field_sessions_per_ip_per_hour == 10
+    assert settings.sa_field_enabled is True
+    assert settings.sa_max_concurrent_sessions == 50
+    assert settings.sa_trust_proxy is False
+    assert settings.sa_git_commit is None
     assert settings.sa_lab_models == []
     assert settings.flagsmith_environment_key is None
     assert settings.gemini_api_key is None

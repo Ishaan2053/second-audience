@@ -129,7 +129,9 @@ class SessionManager:
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
 
-    def begin(self, scenario_id: str | None, identity: Identity) -> dict[str, Any]:
+    def begin(
+        self, scenario_id: str | None, identity: Identity, client_ip_hash: str | None = None
+    ) -> dict[str, Any]:
         """Start a session on the given scenario (random if omitted) and return its brief."""
         scenario = get_scenario(scenario_id) if scenario_id else random.choice(SCENARIOS)
         session_id = uuid.uuid4().hex
@@ -139,7 +141,7 @@ class SessionManager:
             scenario.kind,
             identity.source,
             identity.agent_label,
-            client_ip_hash=None,
+            client_ip_hash=client_ip_hash,
         )
         traits = {
             "agent_label": identity.agent_label,
@@ -202,6 +204,11 @@ class SessionManager:
                     False,
                 )
             return payload
+
+    def open_count(self) -> int:
+        """The number of sessions not yet finalised (finished, exhausted or abandoned)."""
+        with self._lock:
+            return sum(1 for session in self._sessions.values() if session.outcome is None)
 
     def expire_idle(self) -> int:
         """Finalise idle open sessions as abandoned and forget all idle ones. Returns the count."""

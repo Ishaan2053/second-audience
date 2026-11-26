@@ -66,7 +66,10 @@ async def serve(
         style=ErrorStyle.from_flag_value(ARM_FLAG_VALUES[variant]), variant=variant
     )
     manager = SessionManager(ledger, experiment, max_tool_calls=12, idle_seconds=600)
-    settings = Settings(sa_env="test", sa_lab_key=SecretStr(LAB_KEY))
+    # Field limits are tested in test_booking_field.py; here they must not cut a run short.
+    settings = Settings(
+        sa_env="test", sa_lab_key=SecretStr(LAB_KEY), sa_field_sessions_per_ip_per_hour=1000
+    )
     server = build_server(manager, settings)
     async with asgi_client(
         server,

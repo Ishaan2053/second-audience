@@ -13,7 +13,7 @@ Statuses: `pending`, `in progress`, `blocked`, `done`, `cut`. Update at the end 
 | SA-07 | MCP server, session lifecycle and Checkpoint A | done | #14 | #15 | Checkpoint A exact match (40 sessions); local `.env` holds the Production Flagsmith key |
 | SA-08 | Lab runner on Gemini | done | #16 | #17 | Pilot 68 sessions: exposure 24% (below ~60%; SA-09 must revisit scenarios); models gemini-3.1/3.5-flash-lite (2.5-flash-lite 404) |
 | SA-09 | Operator: spec, doctor, start, and going live (Checkpoint B) | done | #18 | #19, #20 | Experiment 680 live on Production; 20-session reconciliation exact. Primary metric is tool calls per session (pilot ceiling on completion) |
-| SA-10 | Field hardening for the public endpoint | pending | | | |
+| SA-10 | Field hardening for the public endpoint | done | #21 | #22 | Limits in `booking/limits.py`; refusals never reach the ledger. Leftmost X-Forwarded-For is spoofable (SA-11 to verify on host) |
 | SA-11 | Public deployment | pending | | | |
 | SA-12 | Operator: status and report | pending | | | |
 | SA-13 | Operator: propose an experiment from failure logs | pending | | | |

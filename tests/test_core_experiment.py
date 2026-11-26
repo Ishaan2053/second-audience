@@ -292,3 +292,16 @@ def test_identities_get_a_stable_mix_of_both_arms(temporary_flag: str) -> None:
     assert all(variant is None for _, variant in styles.values())
     first.flush()
     again.flush()
+
+
+def test_reachable_needs_a_real_flag_from_the_api() -> None:
+    client, sdk = _client(_flag())
+    sdk.get_environment_flags.return_value.get_flag.return_value = _flag()
+    assert client.reachable() is True
+    # The SDK serves the default handler's flag when the API call fails.
+    sdk.get_environment_flags.return_value.get_flag.return_value = DefaultFlag(
+        enabled=True, value=ARM_FLAG_VALUES["control"]
+    )
+    assert client.reachable() is False
+    sdk.get_environment_flags.return_value.get_flag.assert_called_with(FLAG)
+    sdk.get_experiment_flag.assert_not_called()
