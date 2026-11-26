@@ -4,7 +4,7 @@ Statuses: `pending`, `in progress`, `blocked`, `done`, `cut`. Update at the end 
 
 | ID | Title | Status | Issue | PR | Notes |
 |---|---|---|---|---|---|
-| SA-01 | Repository scaffold, tooling and CI | in progress | | | Local scaffold done; GitHub repo, issue, PR and CI pending |
+| SA-01 | Repository scaffold, tooling and CI | done | #1 | #2 | CI green; setup-uv pinned to an exact version (see spike-findings) |
 | SA-02 | Flagsmith setup and verification spike | pending | | | |
 | SA-03 | Booking domain: world, scenarios and correctness checker | pending | | | |
 | SA-04 | Error styles and suggestion heuristic | pending | | | |
