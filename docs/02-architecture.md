@@ -511,18 +511,27 @@ drafts the next experiment from the source experiment's ledger sessions since it
   (one of the source's metrics), observed pattern, hypothesis, rationale and cited session
   IDs. The variant is a list of setting names, not a map, because the Gemini API rejects
   `additionalProperties` in response schemas.
-- **Validation (code):** settings must exist in `ErrorStyle` (and `corrected_call` needs
-  `suggest_alternative`); the style differs from every source arm; cited IDs, and any
-  session ID in the prose, are in the pack; prose numbers appear in the pack; the slug is
-  not used by any spec, proposal or state file; the built spec passes `ExperimentSpec`. A
+- **Validation (code):** settings must exist in `ErrorStyle`, and `corrected_call` and
+  `caution_note` need `suggest_alternative` (without a suggestion neither is rendered); the
+  style renders differently from every source arm (compared by what `render_error` adds,
+  not by the raw flag value); the variant key is not `control` or any source arm key; cited
+  IDs, and any session ID in the prose, are in the pack; prose numbers appear among the
+  computed figures (outcome and suggestion rows, the best-known-arm reason, sampled
+  sessions' tool-call counts), after session IDs, slugs, arm keys and scenario IDs are
+  removed from the prose, so transcript arguments and IDs are not a source of numbers; the
+  slug is not used by any spec, proposal or state file; the built spec passes `ExperimentSpec`. A
   rejected answer is retried once with the reasons; a second rejection exits 1 and saves both
   raw answers to `experiments/proposals/.failed/` (git-ignored).
 - **Output:** `experiments/proposals/<slug>.yaml` (environment `production`, the best-known
   arm as control, 50/50, the source's traffic share and stopping rule; the chosen primary
   metric becomes primary and the old primary secondary) and `<slug>.md` (a "draft generated
   by a model" header, evidence tables from code, the model's text, cited sessions from the
-  ledger). An `audit_log` row with action `propose` records both paths. Without a model key
-  the pack is printed and the command exits 1 without drafting.
+  ledger; table cells escape `|` and line breaks, since agent labels and arguments come from
+  untrusted field clients). An `audit_log` row with action `propose` records both paths.
+  Without a model key the pack is printed and the command exits 1 without drafting.
+- **Next step for the reviewer:** move the spec to `experiments/<slug>.yaml` (where
+  `sa status` and `sa report` look for it), add the slug to `HYPOTHESIS.md`, commit both,
+  then `sa start experiments/<slug>.yaml`.
 
 ### 3.9 Public endpoint
 
