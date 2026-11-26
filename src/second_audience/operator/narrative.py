@@ -28,7 +28,8 @@ NARRATIVE_INSTRUCTIONS = (
     "styles of error message that an AI agent receives from a room-booking tool server. "
     "Use only the facts in the JSON you are given. Copy every number exactly as it is written "
     "there, and write no other number, date, percentage or count. Do not round, convert or "
-    "combine numbers. Do not name a winner unless the decision is 'ship'. Plain sentences, no "
+    "combine numbers. Do not name a winner unless the decision is 'ship_variant' or "
+    "'keep_control'. Plain sentences, no "
     "lists, no Markdown headings. 'summary': three or four sentences stating the question, "
     "what was measured, and the decision. 'decision': two or three sentences explaining how "
     "the pre-registered rule produced the decision."
@@ -124,11 +125,12 @@ def template(analysis: Analysis) -> Narrative:
     else:
         summary += f"Under the pre-registered rule the decision is: {decision.decision.value}."
     explanation = {
-        Decision.SHIP: "The variant met the win-probability threshold and no guardrail was "
-        "credibly worse, so the prescriptive style is shipped.",
-        Decision.NO_SHIP: "The variant did not meet every condition of the rule, so the "
-        "informative style is kept.",
-        Decision.INCONCLUSIVE: "The rule could not be applied yet, so no change is made.",
+        Decision.SHIP_VARIANT: "The variant met the win-probability threshold and no "
+        "guardrail was credibly worse, so the prescriptive style is shipped.",
+        Decision.KEEP_CONTROL: "The evidence favours control (control met the threshold, or a "
+        "guardrail was credibly worse), so the informative style is kept.",
+        Decision.INCONCLUSIVE: "Neither arm met the threshold, or the rule could not be applied "
+        "yet, so the informative style is kept.",
     }[decision.decision]
     return Narrative(summary=summary, decision=explanation)
 

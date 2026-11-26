@@ -199,7 +199,7 @@ def test_manual_values_fill_missing_inference_and_are_marked(
     manual = load_manual(tmp_path)
     analysis = run(spec, state, results_json(n=(80, 80)), manual=manual)
     assert analysis.rows[0].inference_source == "from dashboard"
-    assert analysis.decision.decision is Decision.SHIP
+    assert analysis.decision.decision is Decision.SHIP_VARIANT
     text = render(analysis, write_narrative(analysis, None, "m"), "r.json", "refreshed")
     assert "prescriptive against control (from dashboard): lift -0.300" in text
 
@@ -227,28 +227,31 @@ def test_no_decision_before_the_stopping_rule(spec: ExperimentSpec, state: RunSt
 @pytest.mark.parametrize(
     ("inference", "expected"),
     [
-        ({PRIMARY: _inference(-0.4, -0.6, -0.2, 0.97)}, Decision.SHIP),
-        ({PRIMARY: _inference(-0.1, -0.3, 0.1, 0.80)}, Decision.NO_SHIP),
+        ({PRIMARY: _inference(-0.4, -0.6, -0.2, 0.97)}, Decision.SHIP_VARIANT),  # clear win
+        ({PRIMARY: _inference(0.3, 0.1, 0.5, 0.02)}, Decision.KEEP_CONTROL),  # clear loss
+        ({PRIMARY: _inference(0.2, 0.0, 0.4, 0.05)}, Decision.KEEP_CONTROL),  # control at 0.95
+        ({PRIMARY: _inference(-0.1, -0.3, 0.1, 0.80)}, Decision.INCONCLUSIVE),
+        ({PRIMARY: _inference(0.1, -0.1, 0.3, 0.06)}, Decision.INCONCLUSIVE),  # control 0.94
         (
             {
                 PRIMARY: _inference(-0.4, -0.6, -0.2, 0.97),
                 WRONG: _inference(0.8, 0.2, 1.4, 0.01),  # wrong bookings credibly up
             },
-            Decision.NO_SHIP,
+            Decision.KEEP_CONTROL,
         ),
         (
             {
                 PRIMARY: _inference(-0.4, -0.6, -0.2, 0.97),
                 COMPLETED: _inference(-0.3, -0.5, -0.05, 0.02),  # completion credibly down
             },
-            Decision.NO_SHIP,
+            Decision.KEEP_CONTROL,
         ),
         (
             {
                 PRIMARY: _inference(-0.4, -0.6, -0.2, 0.97),
                 COMPLETED: _inference(-0.1, -0.3, 0.1, 0.2),  # interval spans zero
             },
-            Decision.SHIP,
+            Decision.SHIP_VARIANT,
         ),
         ({}, Decision.INCONCLUSIVE),
     ],
@@ -530,6 +533,7 @@ class Workspace:
             make_drafter=lambda s: self._draft,
             sleep=lambda seconds: None,
             make_proposer=lambda s: None,
+            smoke=lambda s: pytest.fail("no smoke session here"),
         )
         monkeypatch.setattr(cli, "make_context", lambda: context)
 
