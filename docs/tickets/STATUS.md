@@ -9,7 +9,7 @@ Statuses: `pending`, `in progress`, `blocked`, `done`, `cut`. Update at the end 
 | SA-03 | Booking domain: world, scenarios and correctness checker | done | #5 | #6 | Scenarios carry first_attempt and solution; seed bookings can be cancelled by agents (decide before pilot) |
 | SA-04 | Error styles and suggestion heuristic | done | #7 | #8 | No scenario data changed; reschedules get same-room suggestions only |
 | SA-05 | Session ledger | done | #9 | #10 | Verified on SQLite and on Supabase Postgres (22 network tests passed) |
-| SA-06 | Experiment client for Flagsmith | pending | | | |
+| SA-06 | Experiment client for Flagsmith | done | #12 | #13 | Lazy exposure via get_experiment_flag; 2 s timeout, one retry; network test 9/11 split on Development |
 | SA-07 | MCP server, session lifecycle and Checkpoint A | pending | | | |
 | SA-08 | Lab runner on Gemini | pending | | | |
 | SA-09 | Operator: spec, doctor, start, and going live (Checkpoint B) | pending | | | |
