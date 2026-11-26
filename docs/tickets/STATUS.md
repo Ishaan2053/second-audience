@@ -16,7 +16,7 @@ Statuses: `pending`, `in progress`, `blocked`, `done`, `cut`. Update at the end 
 | SA-10 | Field hardening for the public endpoint | done | #21 | #22 | Limits in `booking/limits.py`; refusals never reach the ledger. Leftmost X-Forwarded-For is spoofable (SA-11 to verify on host) |
 | SA-11 | Public deployment | done | #23 | #24, #25 | Render free, Oregon (Supabase is Tokyo; region fixed at creation). First field session verified with Claude Code. Two-network IP-hash check still open |
 | SA-12 | Operator: status and report | done | #26 | #27 | Interim live report: inconclusive (23/25 of 75 per arm); reconciliation exact. Gemini prose number-checked |
-| SA-13 | Operator: propose an experiment from failure logs | pending | | | |
+| SA-13 | Operator: propose an experiment from failure logs | done | #28 | #29 | Live run proposed prescriptive + caution_note (not hard-coded); drafts not committed. Same-flag start needs a cleaned flag after SA-14 |
 | SA-14 | Operator: ship the decision with approval | pending | | | |
 | SA-15 | Demo kit: side-by-side transcript replay | pending | | | |
 | SA-16 | README, results write-up and documentation | pending | | | |
