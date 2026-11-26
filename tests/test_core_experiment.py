@@ -206,8 +206,8 @@ def _cli(*args: str) -> str:
     return result.stdout
 
 
-def _wait_for_split(flag_name: str, timeout_seconds: float = 60) -> None:
-    """Wait until the SDK API serves the new variants; edge propagation takes a few seconds."""
+def _wait_for_split(flag_name: str, timeout_seconds: float = 60, settled: int = 10) -> None:
+    """Wait until every probe gets the new variants; edge propagation takes a few seconds."""
     settings = get_settings()
     if settings.flagsmith_environment_key is None:
         pytest.skip("FLAGSMITH_ENVIRONMENT_KEY is not set")
@@ -216,13 +216,19 @@ def _wait_for_split(flag_name: str, timeout_seconds: float = 60) -> None:
         api_url=settings.flagsmith_api_url,
     )
     deadline = time.monotonic() + timeout_seconds
+    streak = 0
     while time.monotonic() < deadline:
         flag = sdk.get_identity_flags(f"sa-test-probe-{uuid.uuid4().hex[:8]}").get_flag(flag_name)
-        # Before propagation the flag is STATIC with no variant key; after, every identity
-        # carries one ("control" or "prescriptive").
+        # A stale edge node serves the flag as STATIC with no variant key; an updated one
+        # gives every identity a key ("control" or "prescriptive"). For a few seconds both
+        # answer, so one good probe is not enough: wait for a run of them.
         if isinstance(flag, Flag) and flag.variant is not None:
-            return
-        time.sleep(1)
+            streak += 1
+            if streak == settled:
+                return
+        else:
+            streak = 0
+            time.sleep(1)
     raise TimeoutError(f"variants of {flag_name} did not propagate in {timeout_seconds}s")
 
 

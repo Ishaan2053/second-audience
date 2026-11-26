@@ -39,12 +39,15 @@ Surprises found while building, with evidence. The Flagsmith questions are answe
 
 ## Experiment client (SA-06)
 
-- **A new variant takes a few seconds to reach the SDK API.** Straight after
-  `flagsmith feature variant add`, identity evaluations still returned the flag as
-  `reason=STATIC` with `variant=None` for several seconds before they returned
-  `SPLIT; weight=50.0` with a variant key. Once the split is live, control identities carry
-  `variant="control"` (reason `STATIC`), so `variant is not None` is the signal. The network
-  test polls for it (about 10 s in practice) before resolving its identities.
+- **A new variant takes a few seconds to reach every edge node.** Straight after
+  `flagsmith feature variant add`, identity evaluations returned the flag as
+  `reason=STATIC` with `variant=None`. For the next 3 to 6 seconds, answers were mixed: the
+  same identity got `variant=None` from one request and a variant key from the next. After
+  that, every identity was stable (traced over 30 s). Once the split is live, control
+  identities carry `variant="control"`, so `variant is not None` is the signal. A single good
+  probe is not enough: the first version of the network test waited for one, and a later
+  run saw 17 control to 3 prescriptive with identities changing arm between clients. The test
+  now waits for 10 consecutive probes with a variant key (5 to 14 s in practice).
 - **With a `default_flag_handler`, SDK failures do not raise.** `get_identity_flags` catches
   `FlagsmithAPIError` and returns the handler's `DefaultFlag`, and a missing flag returns it
   too. The client treats any `DefaultFlag` as "not in the experiment", as well as raised
