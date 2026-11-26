@@ -38,9 +38,11 @@ free-tier models, and a **public endpoint** where anyone can connect their own a
 - The one experiment: on state-dependent failures, compare an **informative** error (states
   the fact) with a **prescriptive** error (adds a suggested alternative and a corrected
   call). Both arms use the same strict tool schema.
-- Primary metric: `task_completed`, meaning the final server state satisfies the task's
-  constraints. Guardrail metric: `task_wrong_booking`. Some scenarios are traps where the
-  suggestion violates the user's request.
+- Primary metric: tool calls per session (`task_finished`, mean of its value). Guardrails:
+  `task_completed` (the final server state satisfies the task's constraints) and
+  `task_wrong_booking`. Some scenarios are traps where the suggestion violates the user's
+  request. Changed from `task_completed` in SA-09, before the start, because the pilot put
+  completion at its ceiling in both arms (`HYPOTHESIS.md`).
 - Exposure is recorded lazily, at the first styled error a session receives.
 - Lab traffic comes from Gemini free-tier models only. A second provider is a contingency
   (ticket SA-19), used only if quotas force it.

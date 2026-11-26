@@ -228,9 +228,9 @@ def test_start_creates_starts_and_records(harness: Harness) -> None:
     assert harness.admin.changes == [
         "create feature error_style",
         "add variant prescriptive",
+        "create metric Tool calls per session",
         "create metric Task completed correctly",
         "create metric Wrong booking",
-        "create metric Tool calls per session",
         "create experiment",
         "start experiment",
     ]
@@ -245,9 +245,9 @@ def test_start_creates_starts_and_records(harness: Harness) -> None:
     assert state["commit"] == head
     assert state["approved_by"] == "Test Approver"
     assert state["metric_ids"] == {
-        "Task completed correctly": 300,
-        "Wrong booking": 301,
-        "Tool calls per session": 302,
+        "Tool calls per session": 300,
+        "Task completed correctly": 301,
+        "Wrong booking": 302,
     }
     [row] = harness.audit_rows()
     assert (row.action, row.experiment_slug, row.approved_by) == (
@@ -385,14 +385,14 @@ def test_doctor_exits_non_zero_when_a_check_fails(
 
 def test_experiment_payload_matches_the_spec() -> None:
     spec = load_spec(SPEC_SOURCE)
-    metric_ids = {"Task completed correctly": 1, "Wrong booking": 2, "Tool calls per session": 3}
+    metric_ids = {"Tool calls per session": 1, "Task completed correctly": 2, "Wrong booking": 3}
     payload = experiment_payload(spec, 10, {"prescriptive": 20}, metric_ids)
     assert payload["feature"] == 10
     assert payload["name"] == "error-style-v1"
     assert payload["metrics"] == [
-        {"metric": 1, "expected_direction": "increase"},
-        {"metric": 2, "expected_direction": "not_increase"},
-        {"metric": 3, "expected_direction": "decrease"},
+        {"metric": 1, "expected_direction": "decrease"},
+        {"metric": 2, "expected_direction": "not_decrease"},
+        {"metric": 3, "expected_direction": "not_increase"},
     ]
     rollout = payload["experiment_rollout"]
     assert rollout["rollout_percentage"] == 100

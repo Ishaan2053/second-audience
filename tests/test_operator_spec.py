@@ -23,7 +23,7 @@ def test_the_committed_spec_is_valid() -> None:
     spec = load_spec(SPEC_PATH)
     assert spec.slug == "error-style-v1"
     assert [arm.key for arm in spec.arms] == ["control", "prescriptive"]
-    assert spec.primary_metric.event == "task_completed"
+    assert spec.primary_metric.event == "task_finished"
     assert spec.hypothesis.count("\n") == 0
 
 

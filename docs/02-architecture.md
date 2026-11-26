@@ -310,8 +310,8 @@ class ExperimentClient(Protocol):
 - Events: `task_completed` when the outcome is `correct`; `task_wrong_booking` when it is
   `incorrect`; and `task_finished` for every scored session, with the session's domain
   tool-call count as its numeric value (SA-09, amendment A2), for the "tool calls per session"
-  metric (`mean` aggregation). The caller sends them only for sessions that were exposed (Flagsmith also
-  ignores events from identities with no exposure). `track` never raises on delivery
+  metric (`mean` aggregation, the primary metric). The caller sends them only for sessions
+  that were exposed (Flagsmith also ignores events from identities with no exposure). `track` never raises on delivery
   failures; an unknown event name raises `ValueError`. `flush` blocks until buffered events
   are delivered; the server calls it after each `finish_task` and on shutdown, the lab
   runner at the end of a batch.
@@ -477,7 +477,7 @@ concurrent sessions, and no personal data in the ledger (IP stored only as a sal
 | Environments | `development` (smoke and pilot), `production` (the reported experiment) |
 | Warehouse | Flagsmith managed warehouse, enabled on both environments |
 | Flag | `error_style`, multivariate; control value = informative JSON; variant key `prescriptive` |
-| Metrics | `task_completed` (occurrence, up; expected direction `increase`, primary); `task_wrong_booking` (occurrence, down; expected direction `not_increase`, guardrail); `task_finished` (mean of the value, down; expected direction `decrease`, secondary) |
+| Metrics | `task_finished` (mean of the value, down; expected direction `decrease`, primary); `task_completed` (occurrence, up; expected direction `not_decrease`, guardrail); `task_wrong_booking` (occurrence, down; expected direction `not_increase`, guardrail). Efficiency became primary in SA-09 because completion was at its ceiling in the pilot (`HYPOTHESIS.md`) |
 | Split | 100% of exposed sessions, 50/50 |
 
 ## 5. Session sequence
