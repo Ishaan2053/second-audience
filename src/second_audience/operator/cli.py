@@ -15,7 +15,17 @@ from second_audience.core.ledger import Ledger, make_engine
 from second_audience.operator.analysis import Analysis, RunState, analyse, ledger_exposures
 from second_audience.operator.doctor import Report, run_checks
 from second_audience.operator.flagsmith_admin import FlagsmithAdmin, FlagsmithAdminError
+from second_audience.operator.gemini import JsonModel, gemini_json
 from second_audience.operator.narrative import Drafter, gemini_drafter, write_narrative
+from second_audience.operator.propose import (
+    INSTRUCTIONS,
+    Proposal,
+    build_evidence,
+    draft,
+    rationale_markdown,
+    spec_yaml,
+    taken_slugs,
+)
 from second_audience.operator.repo import GitError, Repo
 from second_audience.operator.report import render, report_dir, status_lines
 from second_audience.operator.results import (
@@ -34,6 +44,7 @@ from second_audience.operator.start import (
 )
 
 DEFAULT_SPEC = Path("experiments/error-style-v1.yaml")
+PROPOSALS = DEFAULT_SPEC.parent / "proposals"
 HYPOTHESIS_FILE = "HYPOTHESIS.md"
 
 app = typer.Typer(
@@ -58,6 +69,7 @@ class Context:
     now: Callable[[], datetime]
     make_drafter: Callable[[Settings], Drafter | None]
     sleep: Callable[[float], None]
+    make_proposer: Callable[[Settings], JsonModel | None]
 
 
 def _drafter(settings: Settings) -> Drafter | None:
@@ -65,6 +77,18 @@ def _drafter(settings: Settings) -> Drafter | None:
     if settings.gemini_api_key is None:
         return None
     return gemini_drafter(settings.gemini_api_key.get_secret_value(), settings.sa_operator_model)
+
+
+def _proposer(settings: Settings) -> JsonModel | None:
+    """A Gemini model that answers with a `Proposal`, or `None` without a model key."""
+    if settings.gemini_api_key is None:
+        return None
+    return gemini_json(
+        settings.gemini_api_key.get_secret_value(),
+        settings.sa_operator_model,
+        INSTRUCTIONS,
+        Proposal.model_json_schema(),
+    )
 
 
 def make_context() -> Context:
@@ -78,6 +102,7 @@ def make_context() -> Context:
         now=lambda: datetime.now(UTC),
         make_drafter=_drafter,
         sleep=time.sleep,
+        make_proposer=_proposer,
     )
 
 
@@ -294,3 +319,72 @@ def report(
     typer.echo(f"Prose: {written.author}")
     typer.echo(f"Decision: {analysis.decision.decision.value}")
     typer.echo(f"Report: {path.as_posix()}")
+
+
+@app.command()
+def propose(
+    from_slug: Annotated[
+        str, typer.Option("--from-slug", help="Experiment whose sessions are the evidence.")
+    ] = DEFAULT_SPEC.stem,
+    limit: Annotated[
+        int, typer.Option("--limit", min=1, help="Failing sessions to include as transcripts.")
+    ] = 10,
+) -> None:
+    """Draft the next experiment from failing sessions. Writes files only; never Flagsmith."""
+    context = make_context()
+    spec, run_state = _experiment(from_slug)
+    settings = context.load_settings()
+    ledger = context.open_ledger(settings)
+    records = ledger.sessions_since(run_state.started_at)
+    transcripts = ledger.tool_calls_for(r.session_id for r in records if r.outcome is not None)
+    evidence = build_evidence(spec, records, transcripts, limit, taken_slugs(DEFAULT_SPEC.parent))
+    if not evidence.sessions:
+        raise _fail(f"propose: {from_slug} has no finished non-correct sessions to learn from")
+    model = context.make_proposer(settings)
+    if model is None:
+        typer.echo(json.dumps(evidence.pack(), indent=2))
+        raise _fail(
+            "propose: GEMINI_API_KEY is not set, so no proposal was drafted. The evidence "
+            "pack is printed above."
+        )
+    try:
+        result, attempts = draft(model, evidence)
+    except Exception as error:  # any SDK or network failure; nothing has been written
+        code = getattr(error, "code", "")
+        raise _fail(f"propose: the model call failed: {type(error).__name__} {code}") from error
+    if result is None:
+        failed = PROPOSALS / ".failed" / f"{context.now():%Y%m%dT%H%M%SZ}.json"
+        failed.parent.mkdir(parents=True, exist_ok=True)
+        answers = [{"raw": a.raw, "rejected": a.error} for a in attempts]
+        failed.write_text(json.dumps(answers, indent=2) + "\n", encoding="utf-8")
+        reasons = "".join(f"\n  attempt {i}: {a.error}" for i, a in enumerate(attempts, 1))
+        raise _fail(
+            f"propose: the model's answer was rejected twice:{reasons}\n"
+            f"Raw answers saved to {failed.as_posix()}"
+        )
+    slug = result.spec.slug
+    spec_file = PROPOSALS / f"{slug}.yaml"
+    rationale_file = PROPOSALS / f"{slug}.md"
+    rationale = rationale_markdown(
+        evidence, result, spec_file.as_posix(), settings.sa_operator_model, context.now()
+    )
+    PROPOSALS.mkdir(parents=True, exist_ok=True)
+    spec_file.write_text(spec_yaml(result.spec, from_slug), encoding="utf-8", newline="\n")
+    rationale_file.write_text(rationale, encoding="utf-8", newline="\n")
+    detail = {
+        "source": from_slug,
+        "spec": spec_file.as_posix(),
+        "rationale": rationale_file.as_posix(),
+        "model": settings.sa_operator_model,
+        "attempts": len(attempts),
+        "cited_sessions": result.proposal.cited_sessions,
+    }
+    ledger.audit("propose", slug, json.dumps(detail, sort_keys=True), None)
+    if len(attempts) > 1:
+        typer.echo(f"First answer rejected ({attempts[0].error}); the retry passed.")
+    typer.echo(f"Spec: {spec_file.as_posix()}")
+    typer.echo(f"Rationale: {rationale_file.as_posix()}")
+    typer.echo(
+        f"Next: review and edit both files, commit them, then `sa start {spec_file.as_posix()}` "
+        "(try --dry-run first)."
+    )

@@ -175,6 +175,7 @@ class Harness:
             now=lambda: NOW,
             make_drafter=lambda settings: None,
             sleep=lambda seconds: None,
+            make_proposer=lambda s: None,
         )
         monkeypatch.setattr(cli, "make_context", lambda: context)
 

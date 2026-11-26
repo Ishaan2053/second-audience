@@ -18,6 +18,9 @@ dist/
 .coverage
 htmlcov/
 
+# Rejected `sa propose` answers, kept for inspection
+experiments/proposals/.failed/
+
 # Local ledger databases
 *.db
 *.db-journal

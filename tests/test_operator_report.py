@@ -529,6 +529,7 @@ class Workspace:
             now=lambda: NOW,
             make_drafter=lambda s: self._draft,
             sleep=lambda seconds: None,
+            make_proposer=lambda s: None,
         )
         monkeypatch.setattr(cli, "make_context", lambda: context)
 
