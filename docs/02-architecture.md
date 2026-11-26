@@ -146,7 +146,8 @@ not part of the experiment.
 
 Styled error codes: `ROOM_CONFLICT`, `CAPACITY_EXCEEDED`, `OUTSIDE_OPENING_HOURS`.
 Unstyled (same in both arms): `BOOKING_NOT_FOUND`, `BOOKING_CANCELLED`, `SESSION_NOT_FOUND`,
-`BUDGET_EXHAUSTED`.
+`BUDGET_EXHAUSTED`, `INVALID_ARGUMENTS` (input the schema cannot express, such as a start
+time after the end time).
 
 The flag value is a JSON string parsed into `ErrorStyle`:
 
@@ -240,6 +241,35 @@ number written on the booking.
 | `abandoned` | Idle timeout or server restart. |
 
 Finalisation triggers: `finish_task`, budget exhaustion, or idle timeout.
+
+### 3.4.1 Sessions and the server (`sessions.py`, `server.py`, fixed in SA-07)
+
+- `SessionManager` holds each session's world in memory. Every domain call goes: validate the
+  session, count the call, run the world operation, render a domain error in the session's
+  style, record the call in the ledger, return the payload. The style is resolved, and the
+  exposure recorded, at the session's first styled error; unstyled errors never resolve it.
+- **Budget.** `begin_task` and `finish_task` do not count. With a budget of 12, the first 12
+  domain calls run; the 13th finalises the session as `budget_exhausted` and returns
+  `BUDGET_EXHAUSTED`, as does every later call. An agent that uses exactly 12 calls can still
+  `finish_task` normally. Calls refused for the budget are not recorded.
+- **Finalisation** is one idempotent function. It stores the outcome and `final_state` (the
+  checker's result) once, and sends `task_completed` or `task_wrong_booking` from
+  `final_state` for sessions exposed inside the experiment, except abandoned ones.
+  `finish_task` returns `{session_id, finished, outcome}`; repeat calls return the same.
+  It is recorded in the transcript (with the agent's summary) after the last domain call.
+- **Idle expiry.** A background task runs every `min(60, SA_SESSION_IDLE_SECONDS)` seconds. It
+  finalises open sessions idle for `SA_SESSION_IDLE_SECONDS` as `abandoned` and forgets every
+  idle session, finished or not. Later calls get `SESSION_NOT_FOUND`. Stopping the server
+  abandons every open session and flushes events.
+- **Lab or field.** FastMCP's `get_http_headers()` works inside tools, so no fallback
+  arguments are needed. A request with `X-SA-Lab-Key` equal to `SA_LAB_KEY` (compared with
+  `hmac.compare_digest`) is `lab`, labelled by `X-SA-Agent-Label`; anything else is `field`,
+  labelled by the MCP client's `clientInfo.name`. Missing labels are stored as `unknown`.
+- **Schema.** `strict_input_validation=True`, so the JSON schema is enforced exactly (no
+  string-to-integer coercion). `room_id`, `date` and `scenario_id` are enums, times match
+  `HH:MM` on 30-minute steps, `attendees` is 1 to 20.
+- **Responses never carry the variant key.** Domain errors are returned as normal results
+  (the payload's `error` object), not MCP tool errors; schema violations are MCP tool errors.
 
 ### 3.5 Experiment client (`core/experiment.py`)
 
@@ -437,7 +467,8 @@ sequenceDiagram
 ## 7. Observability and error handling
 
 - Structured logs (JSON lines) with `session_id` on every server log line.
-- The server never raises raw exceptions to clients; unknown errors return a generic
-  `INTERNAL_ERROR` and are logged with a traceback.
+- The server never raises raw exceptions to clients. Unknown errors return FastMCP's masked
+  tool error (`mask_error_details=True`), with no exception detail, and are logged with a
+  traceback.
 - `sa doctor` is the single health check for local setup; `/healthz` for the deployment.
 - `sa report` includes a reconciliation table comparing ledger counts with Flagsmith's.

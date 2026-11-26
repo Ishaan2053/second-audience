@@ -59,6 +59,34 @@ Surprises found while building, with evidence. The Flagsmith questions are answe
   `POST` (the identities endpoint) by default.
 - **`request_timeout_seconds` is typed `int`**, so the setting is an integer.
 
+## MCP server and Checkpoint A (SA-07)
+
+- **FastMCP 4.2.6 and `mcp` 2.3.0.** Both were current when added. `mcp` 2.x has a high-level
+  `mcp.Client` that takes a URL, a `StdioServerParameters` or a `Transport`. To send custom
+  headers, pass `streamable_http_client(url, http_client=create_mcp_http_client(headers=...))`.
+  Tool listings use `input_schema`; `inputSchema` still works but warns.
+- **Request headers inside tools work.** `fastmcp.server.dependencies.get_http_headers()`
+  returns lower-case headers inside sync tools (which FastMCP runs in a thread pool), and `{}`
+  over stdio. The MCP client's name is `ctx.session.client_params.client_info.name`. No
+  `begin_task` fallback arguments are needed.
+- **In-process HTTP tests.** `fastmcp.utilities.tests.asgi_client(server, headers=...)` runs
+  the real Starlette app and lifespan with no socket, so tests cover the HTTP path, headers
+  included.
+- **The FastMCP banner checks PyPI for updates on every start** (`GET
+  pypi.org/pypi/fastmcp/json`). The server passes `show_banner=False`, which skips both.
+- **`strict_input_validation=True`** makes FastMCP validate arguments against the JSON schema
+  exactly. Without it, pydantic's lax mode accepts `"5"` for an integer.
+- **The local `.env` holds the Production server key.** Checkpoint A must run on Development;
+  the first attempts silently evaluated Production (see `docs/checkpoint-a.md`). Anything run
+  against Development must override `FLAGSMITH_ENVIRONMENT_KEY` explicitly. An empty override
+  does not work: `env_ignore_empty=True` falls back to `.env`.
+- **Flagsmith cleanup order.** A running experiment cannot be deleted (400), and its metrics
+  cannot be deleted while it is active (409). Deleting the flag (`flagsmith feature delete`)
+  removes its experiment too; the metrics can then be deleted.
+- **PowerShell 5.1 `ConvertFrom-Json`** passes a JSON array down the pipeline as one object,
+  so `| Where-Object` does not filter its items. Wrap it in parentheses first:
+  `(... | ConvertFrom-Json) | Where-Object ...`.
+
 ## Flagsmith spike (SA-02)
 
 Run on 2026-11-26 against the `Development` environment of project `second-audience`
