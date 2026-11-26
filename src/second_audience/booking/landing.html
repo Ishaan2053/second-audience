@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Second Audience</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --fg: #1d1d1b; --muted: #5d5b55; --line: #dedbd2;
+    --code-bg: #f0eee8; --accent: #2f5d50;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161614; --fg: #ebe9e3; --muted: #a8a59c; --line: #34332f;
+      --code-bg: #22211e; --accent: #8cc2ad;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 42rem; margin: 0 auto; padding: 3rem 1rem 4rem; }
+  h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 0.25rem; }
+  h2 { font-size: 1.05rem; margin: 2.25rem 0 0.5rem; }
+  .lede { color: var(--muted); margin: 0 0 1.5rem; font-size: 1.05rem; }
+  p, ul { margin: 0 0 1rem; }
+  ul { padding-left: 1.25rem; }
+  li { margin-bottom: 0.35rem; }
+  code, pre {
+    font: 0.9em/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    background: var(--code-bg); border-radius: 4px;
+  }
+  code { padding: 0.1em 0.3em; overflow-wrap: anywhere; }
+  pre { padding: 0.75rem 1rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+  pre code { padding: 0; background: none; }
+  .notice { border-left: 3px solid var(--accent); padding: 0.25rem 0 0.25rem 1rem; }
+  a { color: var(--accent); }
+  footer { margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 1rem;
+           color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Second Audience</h1>
+  <p class="lede">A/B testing for the interfaces AI agents use.</p>
+
+  <p>Websites are tested on people all the time. The MCP servers that products expose to AI
+  agents are worded by taste and never measured. Second Audience measures them, with agents
+  as the experiment subjects.</p>
+
+  <p class="notice">This endpoint is a <strong>research sandbox</strong>: a room-booking MCP
+  server for a fictional office. The rooms, people and bookings are made up, and nothing you
+  do here books anything real.</p>
+
+  <h2>You are part of an experiment</h2>
+  <p>Every session is part of a running A/B test on how this server words its error
+  messages. When a booking fails, some sessions get an error that states what went wrong;
+  others also get a suggested alternative. The tools and their schemas are the same for
+  everyone. The results are reported on Flagsmith, the feature flag and experimentation
+  platform that assigns the variants.</p>
+
+  <h2>What is logged</h2>
+  <ul>
+    <li>Every tool call in a session: the tool name, its arguments and the response.</li>
+    <li>A salted, one-way hash of your IP address, used only for rate limiting.
+        The address itself is never stored or logged.</li>
+    <li>The client name your MCP client reports when it connects (for example
+        <code>claude-code</code>).</li>
+  </ul>
+  <p>No accounts and no personal data. Do not type personal information into tool arguments:
+  they are stored as sent.</p>
+
+  <h2>How to connect</h2>
+  <p>The MCP endpoint uses streamable HTTP, with no authentication:</p>
+  <pre><code id="mcp-url">https://&lt;this host&gt;/mcp</code></pre>
+  <p>For example, with Claude Code:</p>
+  <pre><code id="claude-cmd">claude mcp add --transport http second-audience https://&lt;this host&gt;/mcp</code></pre>
+  <p>Any MCP client that supports streamable HTTP works. Then give your agent this
+  instruction:</p>
+  <pre><code>Use the second-audience tools. Call begin_task, complete the task it gives you, then call finish_task.</code></pre>
+  <p>Each session gets a short booking task and a budget of tool calls. New sessions are
+  limited per address per hour; if you hit the limit, the error says when to retry.</p>
+
+  <footer>
+    Source, method and results:
+    <a href="https://github.com/Ishaan2053/second-audience">github.com/Ishaan2053/second-audience</a>
+  </footer>
+</main>
+<script>
+  // Fill in this host's address; without JavaScript the placeholder stays.
+  var url = location.origin + "/mcp";
+  document.getElementById("mcp-url").textContent = url;
+  document.getElementById("claude-cmd").textContent =
+    "claude mcp add --transport http second-audience " + url;
+</script>
+</body>
+</html>

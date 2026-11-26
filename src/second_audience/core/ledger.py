@@ -36,6 +36,7 @@ from sqlalchemy import (
     insert,
     make_url,
     select,
+    text,
     update,
 )
 
@@ -269,6 +270,12 @@ class Ledger:
         """Bind to an engine and create any missing tables."""
         self._engine = engine
         metadata.create_all(engine)
+
+    def ping(self) -> bool:
+        """Run a trivial query; raises if the database cannot be reached."""
+        with self._engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True
 
     def start_session(
         self,
