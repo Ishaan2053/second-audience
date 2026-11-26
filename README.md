@@ -20,6 +20,17 @@ uv run mypy src
 
 Copy `.env.example` to `.env` for local configuration.
 
+## Run the reference server
+
+```powershell
+uv run python -m second_audience.booking.server --transport http --port 8000   # MCP at /mcp
+uv run python -m second_audience.booking.server --transport stdio
+uv run python scripts/smoke.py --sessions 40   # scripted sessions against the HTTP server
+```
+
+Without `FLAGSMITH_ENVIRONMENT_KEY`, every session gets the control style outside any
+experiment. The Checkpoint A evidence is in [docs/checkpoint-a.md](docs/checkpoint-a.md).
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).

@@ -144,7 +144,7 @@ def test_record_tool_call_and_truncation(ledger: Ledger) -> None:
     )
     big = {"rooms": ["x" * 100 for _ in range(200)]}
     ledger.record_tool_call("s-1", 2, "list_rooms", {}, big, None, False)
-    ledger.finish_session("s-1", "incorrect", 2)
+    ledger.finish_session("s-1", "incorrect", 2, final_state="incorrect")
 
     [failing] = ledger.failing_sessions(10)
     first, second = failing.tool_calls
@@ -167,11 +167,12 @@ def test_record_tool_call_rejects_duplicate_seq(ledger: Ledger) -> None:
 
 def test_finish_session_is_idempotent(ledger: Ledger, engine: Engine) -> None:
     _start(ledger)
-    assert ledger.finish_session("s-1", "correct", 3) is True
+    assert ledger.finish_session("s-1", "budget_exhausted", 3, final_state="correct") is True
     first = _session_row(engine)
-    assert ledger.finish_session("s-1", "abandoned", 9) is False
+    assert ledger.finish_session("s-1", "abandoned", 9, final_state="no_booking") is False
     second = _session_row(engine)
-    assert second["outcome"] == "correct"
+    assert second["outcome"] == "budget_exhausted"
+    assert second["final_state"] == "correct"
     assert second["tool_call_count"] == 3
     assert second["finished_at"] == first["finished_at"]
 
@@ -182,7 +183,7 @@ def test_unknown_session_is_rejected(ledger: Ledger) -> None:
     with pytest.raises(UnknownSessionError):
         ledger.record_tool_call("missing", 1, "list_rooms", {}, [], None, False)
     with pytest.raises(UnknownSessionError):
-        ledger.finish_session("missing", "correct", 0)
+        ledger.finish_session("missing", "correct", 0, final_state="correct")
 
 
 def test_plan_runs_skips_duplicates_and_keeps_order(ledger: Ledger) -> None:
@@ -280,13 +281,33 @@ def test_failing_sessions_filters_orders_and_limits(ledger: Ledger) -> None:
         _start(ledger, session_id)
         ledger.record_tool_call(session_id, 1, "list_rooms", {}, [], None, False)
         if outcome is not None:
-            ledger.finish_session(session_id, outcome, 1)
+            ledger.finish_session(session_id, outcome, 1, final_state=outcome)
 
     failing = ledger.failing_sessions(10)
     assert [f.session_id for f in failing] == ["e", "c", "b"]
+    assert [f.final_state for f in failing] == ["abandoned", "no_booking", "incorrect"]
     assert all(len(f.tool_calls) == 1 for f in failing)
     assert [f.session_id for f in ledger.failing_sessions(2)] == ["e", "c"]
     assert ledger.failing_sessions(0) == []
+
+
+def test_session_summaries_return_assignment_and_result(ledger: Ledger) -> None:
+    _start(ledger, "a")
+    _start(ledger, "b")
+    ledger.record_exposure("a", "prescriptive", in_experiment=True)
+    ledger.finish_session("a", "budget_exhausted", 12, final_state="incorrect")
+
+    summaries = {s.session_id: s for s in ledger.session_summaries(["a", "b", "missing"])}
+    assert set(summaries) == {"a", "b"}
+    a, b = summaries["a"], summaries["b"]
+    assert (a.variant, a.in_experiment, a.outcome, a.final_state) == (
+        "prescriptive",
+        True,
+        "budget_exhausted",
+        "incorrect",
+    )
+    assert (b.variant, b.in_experiment, b.outcome, b.final_state) == (None, None, None, None)
+    assert ledger.session_summaries([]) == []
 
 
 def test_schema_creation_is_repeatable(engine: Engine) -> None:
