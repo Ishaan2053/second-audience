@@ -18,6 +18,9 @@ ALL_VARS = (
     "SA_LAB_MODELS",
     "SA_LAB_KEY",
     "SA_SERVER_URL",
+    "SA_LAB_REQUESTS_PER_MINUTE",
+    "SA_LAB_REQUESTS_PER_DAY",
+    "SA_LAB_CONCURRENCY",
     "SA_MAX_TOOL_CALLS",
     "SA_SESSION_IDLE_SECONDS",
     "SA_FIELD_SESSIONS_PER_IP_PER_HOUR",
@@ -59,6 +62,15 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.gemini_api_key is None
     assert settings.flagsmith_api_url is None
     assert settings.sa_server_url is None
+    assert settings.sa_lab_requests_per_minute == 8
+    assert settings.sa_lab_requests_per_day == 400
+    assert settings.sa_lab_concurrency == 1
+
+
+@pytest.mark.parametrize("value", ["0", "4"])
+def test_lab_concurrency_is_one_to_three(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    with pytest.raises(ValidationError):
+        load(monkeypatch, SA_LAB_CONCURRENCY=value)
 
 
 def test_prod_with_all_required_values(monkeypatch: pytest.MonkeyPatch) -> None:

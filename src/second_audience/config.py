@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     sa_lab_models: Annotated[list[str], NoDecode] = Field(default_factory=list)
     sa_lab_key: SecretStr | None = None
     sa_server_url: str | None = None
+    sa_lab_requests_per_minute: int = Field(default=8, gt=0)
+    sa_lab_requests_per_day: int = Field(default=400, gt=0)
+    sa_lab_concurrency: int = Field(default=1, ge=1, le=3)
 
     sa_max_tool_calls: int = Field(default=12, gt=0)
     sa_session_idle_seconds: int = Field(default=600, gt=0)

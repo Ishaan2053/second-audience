@@ -89,6 +89,9 @@ One `Settings` class, validated at start-up. Missing required values fail fast w
 | `SA_LAB_MODELS` | lab | comma-separated model IDs |
 | `SA_LAB_KEY` | server, lab | shared secret marking lab sessions |
 | `SA_SERVER_URL` | lab | MCP endpoint the runner targets |
+| `SA_LAB_REQUESTS_PER_MINUTE` | lab | pacing per model, default 8 |
+| `SA_LAB_REQUESTS_PER_DAY` | lab | per-model daily budget before parking, default 400 |
+| `SA_LAB_CONCURRENCY` | lab | sessions at once, 1 to 3, default 1 |
 | `SA_MAX_TOOL_CALLS` | server | per-session budget, default 12 |
 | `SA_SESSION_IDLE_SECONDS` | server | default 600 |
 | `SA_FIELD_SESSIONS_PER_IP_PER_HOUR` | server | default 10 |
@@ -358,6 +361,13 @@ erDiagram
         string failure_reason
         datetime updated_at
     }
+    MODEL_REQUESTS {
+        int id PK
+        datetime at
+        string model
+        string run_id
+        string status "ok | retry_later | quota_exhausted | error"
+    }
     AUDIT_LOG {
         int id PK
         datetime at
@@ -389,8 +399,19 @@ It then calls `finish_task` if the model did not.
   abstraction added for a contingency (SA-19).
 - The runner never learns the variant. The server does not return it.
 - The system prompt is fixed and recorded in `HYPOTHESIS.md`.
-- Pacing respects per-model request limits. A daily-quota error parks that model until the
-  next reset. Runs are resumable from the `lab_runs` table.
+- Pacing respects per-model request limits (`SA_LAB_REQUESTS_PER_MINUTE`). A per-minute
+  429 or a 5xx server error backs off and retries the same turn. A per-day 429, or reaching the
+  local `SA_LAB_REQUESTS_PER_DAY` budget, parks that model until the next reset (midnight
+  Pacific) while other models continue. Any other error fails the run, which is not retried;
+  three consecutive failures stop the runner.
+- Every model request is logged in `model_requests`, which `status` uses for the requests
+  used today and the average requests per session.
+- Runs are resumable from the `lab_runs` table. An interrupted run (Ctrl+C or a quota error
+  mid-session) returns to `planned`; its orphan session is left for the server's idle
+  expiry, which finalises it as `abandoned`. Runs left `running` by a killed runner are
+  requeued at the next start once they are older than `SA_SESSION_IDLE_SECONDS`.
+- `plan --replicates N` adds N more replicates per model and scenario, shuffled with a seed
+  that is printed and stored in `audit_log` (action `lab_plan`).
 - Lab sessions identify themselves with the `SA_LAB_KEY` header and an agent label.
   Sessions without a valid key are recorded as `field`.
 

@@ -122,6 +122,16 @@ lab_runs = Table(
     UniqueConstraint("model", "scenario_id", "replicate"),
 )
 
+model_requests = Table(
+    "model_requests",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("at", UtcDateTime(), nullable=False),
+    Column("model", String(100), nullable=False),
+    Column("run_id", String(36)),
+    Column("status", String(16), nullable=False),
+)
+
 audit_log = Table(
     "audit_log",
     metadata,
@@ -141,6 +151,19 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
+
+
+class RequestStatus(StrEnum):
+    """How one lab request to a model ended."""
+
+    OK = "ok"
+    RETRY_LATER = "retry_later"
+    QUOTA_EXHAUSTED = "quota_exhausted"
+    ERROR = "error"
+
+
+UNCOUNTED_REQUESTS = (RequestStatus.RETRY_LATER, RequestStatus.QUOTA_EXHAUSTED)
+"""Requests the provider refused (quota or overload); assumed not to count against its quota."""
 
 
 class UnknownSessionError(LookupError):
@@ -396,6 +419,65 @@ class Ledger:
     def fail_run(self, run_id: str, reason: str) -> None:
         """Mark a run failed with the reason; failed runs are not retried automatically."""
         self._set_run(run_id, status=RunStatus.FAILED, failure_reason=reason)
+
+    def requeue_run(self, run_id: str) -> None:
+        """Return an interrupted run to planned, so a later run picks it up again."""
+        self._set_run(run_id, status=RunStatus.PLANNED, session_id=None)
+
+    def requeue_stale_runs(self, older_than: datetime) -> int:
+        """Return runs left running since before `older_than` to planned. Returns the count."""
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                update(lab_runs)
+                .where(lab_runs.c.status == RunStatus.RUNNING, lab_runs.c.updated_at < older_than)
+                .values(status=RunStatus.PLANNED, session_id=None, updated_at=_now())
+            )
+            return result.rowcount
+
+    def max_replicates(self) -> dict[str, int]:
+        """The highest planned replicate number per model."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(lab_runs.c.model, func.max(lab_runs.c.replicate)).group_by(lab_runs.c.model)
+            )
+            return dict(rows.all())
+
+    def record_model_request(self, model: str, run_id: str | None, status: RequestStatus) -> None:
+        """Log one request the lab runner sent to a model."""
+        with self._engine.begin() as conn:
+            conn.execute(
+                insert(model_requests).values(at=_now(), model=model, run_id=run_id, status=status)
+            )
+
+    def model_requests_since(self, since: datetime) -> dict[str, int]:
+        """Requests per model since `since` that count against quota (refusals excluded)."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(model_requests.c.model, func.count())
+                .where(
+                    model_requests.c.at >= since,
+                    model_requests.c.status.not_in(list(UNCOUNTED_REQUESTS)),
+                )
+                .group_by(model_requests.c.model)
+            )
+            return dict(rows.all())
+
+    def requests_per_done_run(self) -> dict[str, float]:
+        """Average quota-counted model requests per completed run, by model."""
+        per_run = (
+            select(model_requests.c.run_id, func.count().label("n"))
+            .where(model_requests.c.status.not_in(list(UNCOUNTED_REQUESTS)))
+            .group_by(model_requests.c.run_id)
+            .subquery()
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(lab_runs.c.model, func.avg(func.coalesce(per_run.c.n, 0)))
+                .select_from(lab_runs.outerjoin(per_run, per_run.c.run_id == lab_runs.c.run_id))
+                .where(lab_runs.c.status == RunStatus.DONE)
+                .group_by(lab_runs.c.model)
+            )
+            return {model: float(avg) for model, avg in rows}
 
     def run_counts(self) -> dict[str, dict[str, int]]:
         """Count lab runs by model, then by status."""
