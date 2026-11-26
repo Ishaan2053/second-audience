@@ -321,7 +321,7 @@ concurrent sessions, and no personal data in the ledger (IP stored only as a sal
 | Environments | `development` (smoke and pilot), `production` (the reported experiment) |
 | Warehouse | Flagsmith managed warehouse, enabled on both environments |
 | Flag | `error_style`, multivariate; control value = informative JSON; variant key `prescriptive` |
-| Metrics | `task_completed` (occurrence, up, primary); `task_wrong_booking` (occurrence, down) |
+| Metrics | `task_completed` (occurrence, up; expected direction `increase`, primary); `task_wrong_booking` (occurrence, down; expected direction `not_increase`, guardrail) |
 | Split | 100% of exposed sessions, 50/50 |
 
 ## 5. Session sequence
