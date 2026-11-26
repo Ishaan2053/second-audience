@@ -1,0 +1,35 @@
+# Ticket Status
+
+Statuses: `pending`, `in progress`, `blocked`, `done`, `cut`. Update at the end of every ticket.
+
+| ID | Title | Status | Issue | PR | Notes |
+|---|---|---|---|---|---|
+| SA-01 | Repository scaffold, tooling and CI | pending | | | |
+| SA-02 | Flagsmith setup and verification spike | pending | | | |
+| SA-03 | Booking domain: world, scenarios and correctness checker | pending | | | |
+| SA-04 | Error styles and suggestion heuristic | pending | | | |
+| SA-05 | Session ledger | pending | | | |
+| SA-06 | Experiment client for Flagsmith | pending | | | |
+| SA-07 | MCP server, session lifecycle and Checkpoint A | pending | | | |
+| SA-08 | Lab runner on Gemini | pending | | | |
+| SA-09 | Operator: spec, doctor, start, and going live (Checkpoint B) | pending | | | |
+| SA-10 | Field hardening for the public endpoint | pending | | | |
+| SA-11 | Public deployment | pending | | | |
+| SA-12 | Operator: status and report | pending | | | |
+| SA-13 | Operator: propose an experiment from failure logs | pending | | | |
+| SA-14 | Operator: ship the decision with approval | pending | | | |
+| SA-15 | Demo kit: side-by-side transcript replay | pending | | | |
+| SA-16 | README, results write-up and documentation | pending | | | |
+| SA-17 | Release hardening, final results and submission | pending | | | |
+| SA-18 | Stretch: public middleware API and a second example server | pending | | | |
+| SA-19 | Contingency: second free model provider | pending | | | |
+
+## Checkpoints and releases
+
+| Item | Status | Date | Evidence |
+|---|---|---|---|
+| Checkpoint A (pipeline proven) | pending | | `docs/checkpoint-a.md` |
+| Checkpoint B (experiment live) | pending | | `v0.1.0` release notes |
+| `v0.2.0` public endpoint | pending | | |
+| `v0.3.0` operator complete | pending | | |
+| `v1.0.0` submission | pending | | |
