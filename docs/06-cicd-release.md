@@ -33,7 +33,7 @@ Runs on every pull request and on pushes to `main`.
 | Types | `uv run mypy src` | yes |
 | Tests | `uv run pytest -m "not network"` | yes |
 | Build | `uv build` | yes |
-| Docker build | `docker build .` (added in SA-11) | yes |
+| Docker build | `docker build .`, then start the image and wait for `/healthz` (added in SA-11) | yes |
 | Dependency audit | `uvx pip-audit` | no (reported) |
 | Secret scan | gitleaks action | yes |
 
@@ -49,7 +49,10 @@ locally by the developer, with results stated in the pull request.
 
 ## Deployment
 
-- The public server deploys from `main` using the repository's `Dockerfile`.
+- The public server is a Render free web service (`render.yaml`). It deploys from `main`
+  using the repository's `Dockerfile`, only after CI passes. Steps are in `docs/deployment.md`.
+- `.github/workflows/keepalive.yml` requests `/healthz` every 10 minutes when the repository
+  variable `SA_PUBLIC_URL` is set.
 - The deployed commit hash is exposed at `/healthz` so a deployment can be tied to a commit.
 - Configuration lives in the host's environment settings, never in the image.
 

@@ -1,0 +1,24 @@
+name: Keep-alive
+
+# Render's free web services sleep after 15 minutes without inbound traffic and take about a
+# minute to wake. A request every 10 minutes keeps the public endpoint warm. It also keeps the
+# Supabase ledger active, because /healthz checks the database. One always-on free service
+# uses about 744 of the workspace's 750 free instance hours a month (docs/deployment.md).
+# Set the repository variable SA_PUBLIC_URL (for example https://<service>.onrender.com) to
+# enable it; without it the job does nothing.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    name: Ping /healthz
+    runs-on: ubuntu-latest
+    if: vars.SA_PUBLIC_URL != ''
+    timeout-minutes: 5
+    steps:
+      - run: curl -fsS --max-time 120 --retry 2 "${{ vars.SA_PUBLIC_URL }}/healthz"

@@ -1,0 +1,33 @@
+# Render Blueprint for the public booking MCP server. See docs/deployment.md.
+# Values marked `sync: false` are entered once in the Render Dashboard when the Blueprint is
+# created, and are then owned by the Dashboard: Blueprint syncs never overwrite them.
+services:
+  - type: web
+    name: second-audience
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: main
+    # Deploy a commit to main only after its CI checks pass.
+    autoDeployTrigger: checksPass
+    healthCheckPath: /healthz
+    # Sessions live in memory, so exactly one instance (free services cannot scale anyway).
+    numInstances: 1
+    envVars:
+      - key: SA_ENV
+        value: prod
+      # Render's proxy sets X-Forwarded-For; the per-IP limit reads the client from it.
+      - key: SA_TRUST_PROXY
+        value: "true"
+      # The kill switch. Dashboard-owned so it can be flipped without a commit.
+      - key: SA_FIELD_ENABLED
+        sync: false
+      # Production server-side key of the Flagsmith environment (SDK only, not the admin API).
+      - key: FLAGSMITH_ENVIRONMENT_KEY
+        sync: false
+      # Supabase session pooler URI (postgresql+psycopg://...?sslmode=require).
+      - key: SA_DATABASE_URL
+        sync: false
+      # Shared lab secret; also salts the client IP hash.
+      - key: SA_LAB_KEY
+        sync: false
