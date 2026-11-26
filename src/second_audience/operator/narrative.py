@@ -14,11 +14,10 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from google import genai
-from google.genai import types
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from second_audience.operator.analysis import Analysis, Decision
+from second_audience.operator.gemini import gemini_json
 
 logger = logging.getLogger(__name__)
 
@@ -160,23 +159,5 @@ def write_narrative(analysis: Analysis, drafter: Drafter | None, model: str) -> 
 
 def gemini_drafter(api_key: str, model: str) -> Drafter:
     """A `Drafter` on the Gemini API with JSON output constrained to `Narrative`."""
-    # The SDK's own retry covers the 503 "high demand" answers seen in the lab (spike
-    # findings, SA-08). One report is one request, so there is no quota pacing to protect.
-    client = genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=3)),
-    )
-
-    def draft(source: dict[str, Any]) -> str:
-        response = client.models.generate_content(
-            model=model,
-            contents=json.dumps(source, indent=2),
-            config=types.GenerateContentConfig(
-                system_instruction=NARRATIVE_INSTRUCTIONS,
-                response_mime_type="application/json",
-                response_json_schema=Narrative.model_json_schema(),
-            ),
-        )
-        return response.text or ""
-
-    return draft
+    ask = gemini_json(api_key, model, NARRATIVE_INSTRUCTIONS, Narrative.model_json_schema())
+    return lambda source: ask(json.dumps(source, indent=2))

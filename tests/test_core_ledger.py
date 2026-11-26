@@ -367,3 +367,14 @@ def test_make_engine_pre_pings_postgres() -> None:
     url = "postgresql+psycopg://user:pw@localhost:5432/db"
     engine = make_engine(Settings(sa_database_url=url))  # type: ignore[arg-type]
     assert engine.pool._pre_ping is True  # type: ignore[attr-defined]
+
+
+def test_tool_calls_for_returns_transcripts_in_order(ledger: Ledger) -> None:
+    _start(ledger, "a")
+    _start(ledger, "b")
+    ledger.record_tool_call("a", 2, "book_room", {"room_id": "R1"}, {"ok": True}, None, False)
+    ledger.record_tool_call("a", 1, "list_rooms", {}, [], None, False)
+    calls = ledger.tool_calls_for(["a", "b", "missing"])
+    assert list(calls) == ["a"]
+    assert [(c.seq, c.tool) for c in calls["a"]] == [(1, "list_rooms"), (2, "book_room")]
+    assert ledger.tool_calls_for([]) == {}

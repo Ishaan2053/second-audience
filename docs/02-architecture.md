@@ -67,7 +67,7 @@ second-audience/
       cli.py                    Typer app: sa
       flagsmith_admin.py        CLI and Admin API wrapper
       spec.py                   experiment spec model
-      report.py  propose.py  ship.py
+      report.py  propose.py  ship.py  gemini.py
   tests/
 ```
 
@@ -93,7 +93,7 @@ One `Settings` class, validated at start-up. Missing required values fail fast w
 | `SA_LAB_REQUESTS_PER_MINUTE` | lab | pacing per model, default 8 |
 | `SA_LAB_REQUESTS_PER_DAY` | lab | per-model daily budget before parking, default 400 |
 | `SA_LAB_CONCURRENCY` | lab | sessions at once, 1 to 3, default 1 |
-| `SA_OPERATOR_MODEL` | operator | Gemini model that drafts the prose of `sa report`, default `gemini-3.5-flash-lite` |
+| `SA_OPERATOR_MODEL` | operator | Gemini model that drafts the prose of `sa report` and the proposals of `sa propose`, default `gemini-3.5-flash-lite` |
 | `SA_MAX_TOOL_CALLS` | server | per-session budget, default 12 |
 | `SA_SESSION_IDLE_SECONDS` | server | default 600 |
 | `SA_FIELD_SESSIONS_PER_IP_PER_HOUR` | server | new field sessions per client IP per sliding hour, default 10 |
@@ -494,6 +494,44 @@ results, `manual.yaml`, saved files), `stats.py` (Wilson interval, chi-square, s
 - **Prose:** sections 1 and 9 are drafted by `SA_OPERATOR_MODEL` from a JSON of display
   strings. Every number in the draft must appear in that JSON; otherwise, or with no key,
   an API error or `--no-llm`, a fixed template is used. The report names its author.
+
+**Propose (fixed in SA-13).** `sa propose [--from-slug <slug>] [--limit N]` (`propose.py`)
+drafts the next experiment from the source experiment's ledger sessions since its
+`started_at`. It never calls Flagsmith; starting a proposal is still `sa start`.
+
+- **Evidence pack (code):** outcome counts and mean tool calls by arm and scenario kind;
+  per arm and kind, how many `corrected_call`s were offered and how many the agent sent
+  unchanged (same tool, same arguments, session ID ignored) as its very next call; and up to
+  N non-correct sessions, round-robin over arm and kind, newest first, as compact transcripts
+  (tool, arguments, error code, followed or not, outcome). The best-known arm is the one
+  with the best ledger mean on the source's primary metric (control on a tie); it is not the
+  source experiment's decision.
+- **Model step:** `SA_OPERATOR_MODEL` gets the pack, the `ErrorStyle` settings and their
+  meanings, and answers JSON: slug, variant key, the settings that are true, primary metric
+  (one of the source's metrics), observed pattern, hypothesis, rationale and cited session
+  IDs. The variant is a list of setting names, not a map, because the Gemini API rejects
+  `additionalProperties` in response schemas.
+- **Validation (code):** settings must exist in `ErrorStyle`, and `corrected_call` and
+  `caution_note` need `suggest_alternative` (without a suggestion neither is rendered); the
+  style renders differently from every source arm (compared by what `render_error` adds,
+  not by the raw flag value); the variant key is not `control` or any source arm key; cited
+  IDs, and any session ID in the prose, are in the pack; prose numbers appear among the
+  computed figures (outcome and suggestion rows, the best-known-arm reason, sampled
+  sessions' tool-call counts), after session IDs, slugs, arm keys and scenario IDs are
+  removed from the prose, so transcript arguments and IDs are not a source of numbers; the
+  slug is not used by any spec, proposal or state file; the built spec passes `ExperimentSpec`. A
+  rejected answer is retried once with the reasons; a second rejection exits 1 and saves both
+  raw answers to `experiments/proposals/.failed/` (git-ignored).
+- **Output:** `experiments/proposals/<slug>.yaml` (environment `production`, the best-known
+  arm as control, 50/50, the source's traffic share and stopping rule; the chosen primary
+  metric becomes primary and the old primary secondary) and `<slug>.md` (a "draft generated
+  by a model" header, evidence tables from code, the model's text, cited sessions from the
+  ledger; table cells escape `|` and line breaks, since agent labels and arguments come from
+  untrusted field clients). An `audit_log` row with action `propose` records both paths.
+  Without a model key the pack is printed and the command exits 1 without drafting.
+- **Next step for the reviewer:** move the spec to `experiments/<slug>.yaml` (where
+  `sa status` and `sa report` look for it), add the slug to `HYPOTHESIS.md`, commit both,
+  then `sa start experiments/<slug>.yaml`.
 
 ### 3.9 Public endpoint
 

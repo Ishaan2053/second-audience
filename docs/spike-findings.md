@@ -584,3 +584,21 @@ and `gemini-2.5-pro` start auto-routing to newer models on 2026-12-01, after the
 - **750 free hours per workspace, not per service.** An always-awake service uses about 744
   in a 31-day month, so the keep-alive ping is safe only while this is the workspace's only
   free web service.
+
+## Operator propose (SA-13)
+
+- **The Gemini API rejects `additionalProperties` in response schemas** (google-genai docs:
+  `_raise_for_unsupported_mldev_properties`; Vertex AI accepts it). A `dict[str, bool]` field
+  would generate one, so `sa propose` asks for the variant as a list of the `ErrorStyle`
+  settings that are true. `additionalProperties: false`, which pydantic emits for
+  `extra="forbid"` models, is falsy and passes (the `sa report` narrative schema has used it
+  since SA-12).
+- **First live run on the ledger** (48 finished, enrolled sessions of `error-style-v1`):
+  `gemini-3.5-flash-lite` proposed prescriptive plus `caution_note` against prescriptive as
+  the best-known arm, valid at the first attempt. Its prose claimed agents "blindly follow"
+  suggestions, while the code's evidence shows 0 of 13 corrected calls followed on traps;
+  the reviewer has to check the prose against the tables, which is why the header says so.
+- **Reusing the flag:** `sa start --dry-run` on the proposal refuses while `error_style`
+  still has experiment 1's default value, its `prescriptive` variant and an active
+  experiment. Starting a proposal on the same flag needs SA-14 (ship) and a cleaned-up flag
+  first.
