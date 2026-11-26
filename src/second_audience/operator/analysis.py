@@ -35,6 +35,9 @@ OUTCOMES = ("correct", "incorrect", "no_booking", "budget_exhausted", "abandoned
 FROM_API = "Flagsmith API"
 FROM_DASHBOARD = "from dashboard"
 
+SMOKE_AGENT_LABEL = "sa-ship-smoke"
+"""The agent label of `sa ship`'s smoke sessions, which are checks, not experiment traffic."""
+
 
 class Decision(StrEnum):
     """What the pre-registered decision rule says to do. Only `ship_variant` changes the flag."""
@@ -72,6 +75,11 @@ class RunState:
 
 
 # --- ledger predicates: these mirror what the server sends to Flagsmith (booking/sessions.py)
+
+
+def ship_smoke(record: SessionRecord) -> bool:
+    """A smoke session run by `sa ship`; excluded from every analysis and from evidence."""
+    return record.agent_label == SMOKE_AGENT_LABEL
 
 
 def in_experiment(record: SessionRecord) -> bool:
@@ -444,9 +452,10 @@ def analyse(
     records: list[SessionRecord],
     now: datetime,
 ) -> Analysis:
-    """Compute every section's numbers. Two-arm experiments only."""
+    """Compute every section's numbers, without `sa ship` smoke sessions. Two arms only."""
     if len(spec.arms) != 2 or spec.control.key != CONTROL_KEY:
         raise ValueError("sa report supports two-arm experiments (control and one variant)")
+    records = [r for r in records if not ship_smoke(r)]
     rows = metric_rows(spec, state, results, manual)
     exposures = flagsmith_exposures(spec, rows)
     breakdowns = {title: breakdown(spec, records, key) for title, key in BREAKDOWNS.items()}

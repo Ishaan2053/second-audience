@@ -19,6 +19,7 @@ from second_audience.config import Settings
 from second_audience.core.ledger import Ledger, ToolCallRecord, audit_log
 from second_audience.core.styles import ErrorStyle
 from second_audience.operator import cli
+from second_audience.operator.analysis import SMOKE_AGENT_LABEL
 from second_audience.operator.doctor import run_checks
 from second_audience.operator.propose import (
     DRAFT_HEADER,
@@ -192,6 +193,23 @@ def test_evidence_counts_outcomes_and_suggestion_uptake(evidence: Evidence) -> N
     (step, _) = next(s for s in evidence.sessions if s["session_id"] == sid(3))["transcript"]
     assert "session_id" not in step["arguments"]
     assert step["followed_corrected_call"] is True
+
+
+def test_ship_smoke_sessions_are_not_evidence(tmp_path: Path) -> None:
+    ledger = Ledger(create_engine(f"sqlite:///{tmp_path / 'smoke.db'}"))
+    seed(ledger)
+    smoke = sid(99)
+    ledger.start_session(smoke, "s01", "aligned", "lab", SMOKE_AGENT_LABEL, None)
+    ledger.record_exposure(smoke, "control", in_experiment=True)
+    ledger.finish_session(smoke, "no_booking", 3, final_state="no_booking")
+    records = ledger.sessions_since(datetime(2020, 1, 1, tzinfo=UTC))
+    assert smoke in {r.session_id for r in records}
+    found = build_evidence(load_spec(SPEC_SOURCE), records, {}, 10, [])
+    assert smoke not in found.session_ids
+    control = next(
+        r for r in found.outcome_rows if (r["arm"], r["scenario_kind"]) == ("control", "aligned")
+    )
+    assert control["sessions"] == 1  # the seeded session only
 
 
 def test_sample_is_limited_and_spread_over_arms(evidence: Evidence, tmp_path: Path) -> None:

@@ -16,6 +16,7 @@ from second_audience.config import Settings
 from second_audience.core.ledger import Ledger, SessionRecord, audit_log
 from second_audience.operator import cli
 from second_audience.operator.analysis import (
+    SMOKE_AGENT_LABEL,
     Decision,
     RunState,
     analyse,
@@ -24,6 +25,7 @@ from second_audience.operator.analysis import (
 )
 from second_audience.operator.flagsmith_admin import FlagsmithAdmin, FlagsmithAdminError
 from second_audience.operator.narrative import (
+    NARRATIVE_INSTRUCTIONS,
     facts,
     template,
     unsupported_numbers,
@@ -328,6 +330,16 @@ def test_traffic_counts_fallback_and_outcomes(spec: ExperimentSpec, state: RunSt
     assert lab.outcomes["abandoned"] == 1
 
 
+def test_ship_smoke_sessions_are_left_out(spec: ExperimentSpec, state: RunState) -> None:
+    smoke = record("prescriptive", kind="trap", final_state="incorrect", model=SMOKE_AGENT_LABEL)
+    analysis = run(spec, state, results_json(), records=[*RECORDS, smoke])
+    assert smoke not in analysis.records
+    assert all(t.model != SMOKE_AGENT_LABEL for t in analysis.traffic)
+    assert all(c.group != SMOKE_AGENT_LABEL for c in analysis.breakdowns["By model"])
+    assert len(analysis.trap_wrong) == 1  # only the seeded one, not the smoke session
+    assert analysis == run(spec, state, results_json())
+
+
 def test_split_health_uses_flagsmith_counts(spec: ExperimentSpec, state: RunState) -> None:
     analysis = run(spec, state, results_json(n=(70, 30)))
     assert analysis.srm is not None
@@ -417,6 +429,38 @@ def test_failing_model_call_falls_back(spec: ExperimentSpec, state: RunState) ->
     written = write_narrative(analysis, drafter, "gemini-x")
     assert written.narrative == template(analysis)
     assert "model call failed: ConnectionError" in written.author
+
+
+GUARDRAIL_ONLY = {
+    PRIMARY: _inference(-0.4, -0.6, -0.2, 0.97),  # the variant wins the primary metric
+    WRONG: _inference(0.8, 0.2, 1.4, 0.01),  # but wrong bookings are credibly up
+}
+CONTROL_WINS = {PRIMARY: _inference(0.3, 0.1, 0.5, 0.02)}
+
+
+def test_keep_control_says_why_control_is_kept(spec: ExperimentSpec, state: RunState) -> None:
+    guarded = run(spec, state, results_json(n=(75, 75), inference=GUARDRAIL_ONLY))
+    assert guarded.decision.decision is Decision.KEEP_CONTROL
+    assert facts(guarded)["keep_control_reason"] == "guardrail_credibly_worse"
+    assert facts(guarded)["guardrails_credibly_worse"] == ["Wrong booking"]
+    prose = template(guarded).decision
+    assert "credibly worse on the guardrail Wrong booking" in prose
+    assert "does not make control the winner" in prose
+    assert "Control met" not in prose
+    lost = run(spec, state, results_json(n=(75, 75), inference=CONTROL_WINS))
+    assert facts(lost)["keep_control_reason"] == "control_meets_threshold"
+    assert facts(lost)["guardrails_credibly_worse"] == []
+    assert template(lost).decision.startswith("Control met the win-probability threshold")
+    shipped = run(
+        spec,
+        state,
+        results_json(
+            n=(75, 75), inference=CONTROL_WINS | {PRIMARY: _inference(-0.4, -0.6, -0.2, 0.97)}
+        ),
+    )
+    assert "keep_control_reason" not in facts(shipped)
+    assert "'guardrail_credibly_worse'" in NARRATIVE_INSTRUCTIONS
+    assert "do not call control the winner" in NARRATIVE_INSTRUCTIONS
 
 
 def test_template_numbers_are_all_in_the_facts(spec: ExperimentSpec, state: RunState) -> None:
