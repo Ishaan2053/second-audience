@@ -83,7 +83,7 @@ One `Settings` class, validated at start-up. Missing required values fail fast w
 | `FLAGSMITH_ENVIRONMENT_KEY` | server | SDK key for the Flagsmith environment |
 | `FLAGSMITH_API_URL` | server | optional override |
 | `SA_FLAG_NAME` | server | default `error_style` |
-| `SA_DATABASE_URL` | server, operator | ledger; default `sqlite:///./sa.db` |
+| `SA_DATABASE_URL` | server, operator, lab | ledger; default `sqlite:///./sa.db`; Postgres as `postgresql+psycopg://...` |
 | `GEMINI_API_KEY` | lab, operator | model access |
 | `SA_LAB_MODELS` | lab | comma-separated model IDs |
 | `SA_LAB_KEY` | server, lab | shared secret marking lab sessions |
@@ -288,29 +288,32 @@ erDiagram
         datetime exposed_at
         datetime finished_at
         string outcome
-        string final_state "checker result at finalisation"
+        string final_state "checker result at finalisation (added in SA-07)"
         int tool_call_count
-        string client_ip_hash "field only"
+        string client_ip_hash "field only; salted hex digest"
     }
     TOOL_CALLS {
         int id PK
         string session_id FK
-        int seq
+        int seq "unique per session"
         string tool
         json arguments
-        json result
+        json result "8 KB cap; larger results become a preview"
+        bool result_truncated
         string error_code
         bool styled
         datetime at
     }
     LAB_RUNS {
         string run_id PK
+        int plan_order "claim order"
         string model
         string scenario_id
-        int replicate
-        string status
+        int replicate "unique with model and scenario_id"
+        string status "planned | running | done | failed"
         string session_id
         string failure_reason
+        datetime updated_at
     }
     AUDIT_LOG {
         int id PK
@@ -321,6 +324,16 @@ erDiagram
         string approved_by
     }
 ```
+
+- All timestamps are stored and returned as UTC. The schema is created on start-up with
+  `create_all`; there is no migration tool.
+- `finish_session` is idempotent: only the first call stores an outcome. `record_exposure`
+  likewise keeps the first exposure.
+- `claim_next_run` is a compare-and-set (`UPDATE ... WHERE status = 'planned'`), so two
+  runners can never claim the same run, on SQLite or Postgres.
+- `start_session` accepts only a 16-64 character lowercase hex digest as `client_ip_hash`,
+  so a raw IP address cannot be written through the ledger's API.
+- Postgres URLs use the psycopg 3 driver: `postgresql+psycopg://user:pass@host/db`.
 
 ### 3.7 Lab runner (`lab/`)
 

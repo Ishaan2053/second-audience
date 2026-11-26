@@ -15,6 +15,15 @@ Surprises found while building, with evidence. The Flagsmith questions are answe
 - **pydantic validation errors echo their input by default**, which would print any secrets
   already set. `Settings` sets `hide_input_in_errors=True`.
 
+## Ledger (SA-05)
+
+- **SQLAlchemy 2.1 defaults `postgresql://` to psycopg 3**, not psycopg2. The project depends
+  on `psycopg[binary]` (bundles libpq, so it installs on Windows without a local Postgres)
+  and documents `postgresql+psycopg://` URLs explicitly.
+- **SQLite drops the UTC offset on read** even with `DateTime(timezone=True)`. The ledger
+  uses a small `UtcDateTime` type that re-attaches UTC, so both backends return aware UTC
+  timestamps.
+
 ## Flagsmith spike (SA-02)
 
 Run on 2026-11-26 against the `Development` environment of project `second-audience`

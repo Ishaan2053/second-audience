@@ -8,7 +8,7 @@ Statuses: `pending`, `in progress`, `blocked`, `done`, `cut`. Update at the end 
 | SA-02 | Flagsmith setup and verification spike | done | #3 | #4 | Gemini RPM/RPD not readable (login page); SA-08 must read them |
 | SA-03 | Booking domain: world, scenarios and correctness checker | done | #5 | #6 | Scenarios carry first_attempt and solution; seed bookings can be cancelled by agents (decide before pilot) |
 | SA-04 | Error styles and suggestion heuristic | done | #7 | #8 | No scenario data changed; reschedules get same-room suggestions only |
-| SA-05 | Session ledger | pending | | | |
+| SA-05 | Session ledger | done | #9 | #10 | SQLite verified; Postgres run pending until the developer creates the hosted DB (`uv run pytest -m network tests/test_core_ledger.py`) |
 | SA-06 | Experiment client for Flagsmith | pending | | | |
 | SA-07 | MCP server, session lifecycle and Checkpoint A | pending | | | |
 | SA-08 | Lab runner on Gemini | pending | | | |
