@@ -7,7 +7,8 @@ Production Flagsmith environment.
 
 | Item | Value |
 |---|---|
-| Public URL | `https://second-audience.onrender.com` (set when the service is created; see below) |
+| Public URL | <https://second-audience.onrender.com> |
+| Region | Oregon (`render.yaml`; fixed at creation, see section 1) |
 | MCP endpoint | `<public URL>/mcp` (streamable HTTP, no authentication) |
 | Health | `<public URL>/healthz` |
 | Landing page | `<public URL>/` |
@@ -31,6 +32,14 @@ comparisons). The criteria are listed in order of importance.
 
 **Choice: Render.** It is the only candidate that needs no payment card. The cost is the
 cold start, handled in section 6.
+
+**Region: Oregon.** The Supabase ledger is in `ap-northeast-1` (Tokyo), and Render has no
+Japan region; its nearest is Singapore. Render cannot move an existing service between
+regions, so changing it means deleting the service and creating the Blueprint again. The
+service stayed in Oregon: Oregon to Tokyo adds roughly 30 to 40 ms per database round trip
+over Singapore, a small cost next to model latency, and Oregon is closer to most US and EU
+agents. To move it, change `region` in `render.yaml` first, then recreate the service
+(section 4).
 
 Other Render free-tier terms that matter here: 750 free instance hours per workspace per
 calendar month, an ephemeral filesystem (the ledger is in Postgres for that reason),
@@ -84,7 +93,8 @@ transaction pooler on port 6543 (no prepared statements). See `docs/spike-findin
 3. Fill in the four prompted values from section 3, then **Deploy Blueprint**. The first
    build takes a few minutes.
 4. Note the service URL Render assigns (`https://second-audience.onrender.com`, or with a
-   suffix if the name is taken). Update the URL in this file and the README if it differs.
+   suffix if the name is taken). If it differs, update it in this file, the README and the
+   `SA_PUBLIC_URL` variable.
 5. Check it from PowerShell:
 
    ```powershell
@@ -185,3 +195,23 @@ Any client that supports streamable HTTP works the same way: the URL is the only
    The server reads the leftmost `X-Forwarded-For` entry, so a client that sends its own
    header can dodge the per-IP limit; the global session cap bounds the load either way
    (`docs/spike-findings.md`, SA-10).
+
+## 9. First deployment record (2026-11-26)
+
+- Service created from the Blueprint by the developer; region Oregon; URL
+  `https://second-audience.onrender.com`. `SA_PUBLIC_URL` set; the keep-alive workflow's
+  first (manual) run succeeded.
+- `/healthz` at 16:28 UTC, about 7 s for the first response:
+  `{"status":"ok","commit":"c5e4b154a4dcf8da2187588e2767d46176e4c8a7","active_sessions":0,"field_enabled":true,"checks":{"database":true,"flagsmith":true}}`.
+  The commit is `main` at the time. No `SA_GIT_COMMIT` is set on the host, so this confirms
+  Render passes `RENDER_GIT_COMMIT` to the Docker build.
+- External client: Claude Code 2.1.325 in print mode (`claude -p`), with only this server
+  configured (`--strict-mcp-config`, `type: http`), given the suggested instruction. It ran
+  scenario `s08`: `book_room` R1 hit `ROOM_CONFLICT` with the prescriptive suggestion (R2),
+  then `list_rooms`, `book_room` R2, `finish_task`, outcome `correct`.
+- Ledger (Supabase Postgres), session `d6af23ea4c834b7685fc782f054999be`: `source = field`,
+  `agent_label = claude-code`, `variant = prescriptive`, `in_experiment = true`,
+  `outcome = correct`, `tool_call_count = 3`, `client_ip_hash` set. It is the first field
+  session in the ledger.
+- Not yet checked: field sessions from two different networks get different
+  `client_ip_hash` values (section 8, step 4).
