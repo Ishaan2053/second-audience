@@ -51,6 +51,11 @@ class RenderedError:
     styled: bool
 
 
+def error_payload(code: str, message: str) -> dict[str, Any]:
+    """The base error payload every style shares: a stable code and a plain message."""
+    return {"error": {"code": code, "message": message}}
+
+
 def error_message(error: DomainError) -> str:
     """The plain statement of fact for an error, identical in every style."""
     return _MESSAGES[error.code].format(**error.details)
@@ -60,7 +65,7 @@ def render_error(
     error: DomainError, world: World, style: ErrorStyle, attempted_call: AttemptedCall
 ) -> RenderedError:
     """Render an error in the given style; suggestion fields appear only if one exists."""
-    payload: dict[str, Any] = {"error": {"code": error.code, "message": error_message(error)}}
+    payload = error_payload(error.code, error_message(error))
     styled = error.code in STYLED_CODES
     if not (styled and style.suggest_alternative):
         return RenderedError(payload, styled)
