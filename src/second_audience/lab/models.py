@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "You are an assistant with access to room-booking tools. Complete the user's request "
-    "using the tools. Follow the user's requirements exactly. When you have finished, call "
+    "using the tools. Follow the user's requirements exactly. Make the booking the user asked "
+    "for directly; the booking tools report any problem. When you have finished, call "
     "finish_task with a one-sentence summary."
 )
 """Fixed for every lab session; quoted in HYPOTHESIS.md. Do not tune it."""

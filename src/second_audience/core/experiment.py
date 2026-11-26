@@ -9,6 +9,7 @@ reach the caller: the session gets the control style and is left out of the expe
 import logging
 import threading
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Protocol, Self
 
@@ -23,12 +24,17 @@ logger = logging.getLogger(__name__)
 
 TASK_COMPLETED = "task_completed"
 TASK_WRONG_BOOKING = "task_wrong_booking"
-EVENTS = frozenset({TASK_COMPLETED, TASK_WRONG_BOOKING})
+TASK_FINISHED = "task_finished"
+"""Sent for every scored, exposed session with the session's tool-call count as its value."""
+EVENTS = frozenset({TASK_COMPLETED, TASK_WRONG_BOOKING, TASK_FINISHED})
 
 DEFAULT_CACHE_SIZE = 4096
 
 # The style a session gets, and its variant key; `None` means "not in the experiment".
 Assignment = tuple[ErrorStyle, str | None]
+
+# Identity traits stored on the Flagsmith identity (agent label, source, scenario kind).
+Traits = Mapping[str, str]
 
 _NOT_IN_EXPERIMENT: Assignment = (CONTROL, None)
 
@@ -36,12 +42,12 @@ _NOT_IN_EXPERIMENT: Assignment = (CONTROL, None)
 class ExperimentClient(Protocol):
     """What the server and the lab runner need from the experiment engine."""
 
-    def style_for(self, session_id: str) -> Assignment:
+    def style_for(self, session_id: str, traits: Traits | None = None) -> Assignment:
         """Return the session's error style and variant key, recording the exposure once."""
         ...
 
-    def track(self, session_id: str, event: str) -> None:
-        """Send a conversion event for the session. Never raises at runtime."""
+    def track(self, session_id: str, event: str, value: float | None = None) -> None:
+        """Send an event (with an optional numeric value) for the session. Never raises."""
         ...
 
     def flush(self) -> None:
@@ -101,7 +107,7 @@ class FlagsmithExperimentClient:
         )
         return cls(sdk, settings.sa_flag_name)
 
-    def style_for(self, session_id: str) -> Assignment:
+    def style_for(self, session_id: str, traits: Traits | None = None) -> Assignment:
         """Resolve the flag once per session, record the exposure, and cache the result."""
         with self._lock:
             cached = self._cache.get(session_id)
@@ -111,7 +117,7 @@ class FlagsmithExperimentClient:
         # Resolved outside the lock so one slow request does not block other sessions. A
         # session's tool calls arrive one at a time, so a duplicate resolution is unlikely,
         # and Flagsmith counts exposed identities, not exposure events.
-        assignment = self._resolve(session_id)
+        assignment = self._resolve(session_id, traits)
         with self._lock:
             self._cache[session_id] = assignment
             self._cache.move_to_end(session_id)
@@ -119,10 +125,14 @@ class FlagsmithExperimentClient:
                 self._cache.popitem(last=False)
         return assignment
 
-    def _resolve(self, session_id: str) -> Assignment:
+    def _resolve(self, session_id: str, traits: Traits | None) -> Assignment:
         """Ask Flagsmith for the session's flag; any failure yields the control style."""
         try:
-            flag = self._sdk.get_experiment_flag(self._flag_name, identifier=session_id)
+            # Traits ride on the same request and are stored on the identity, so Flagsmith
+            # segments can target them later (docs/08-flagsmith-addons.md, A1).
+            flag = self._sdk.get_experiment_flag(
+                self._flag_name, identifier=session_id, traits=dict(traits) if traits else None
+            )
         except Exception:
             logger.warning(
                 "Flagsmith call failed; session %s gets the control style outside the experiment",
@@ -139,11 +149,11 @@ class FlagsmithExperimentClient:
             )
         return assignment_from_flag(flag)
 
-    def track(self, session_id: str, event: str) -> None:
+    def track(self, session_id: str, event: str, value: float | None = None) -> None:
         """Send `event` for the session; delivery failures are logged, not raised."""
         check_event(event)
         try:
-            self._sdk.track_event(event, identifier=session_id)
+            self._sdk.track_event(event, identifier=session_id, value=value)
         except Exception:
             logger.warning("could not track %s for session %s", event, session_id, exc_info=True)
 
@@ -162,18 +172,21 @@ class NullExperimentClient:
     style: ErrorStyle = CONTROL
     variant: str | None = None
     resolved: list[str] = field(default_factory=list)
-    tracked: list[tuple[str, str]] = field(default_factory=list)
+    traits: dict[str, dict[str, str]] = field(default_factory=dict)
+    tracked: list[tuple[str, str, float | None]] = field(default_factory=list)
     flushes: int = 0
 
-    def style_for(self, session_id: str) -> Assignment:
-        """Return the fixed style and variant."""
+    def style_for(self, session_id: str, traits: Traits | None = None) -> Assignment:
+        """Return the fixed style and variant, remembering the traits it was given."""
         self.resolved.append(session_id)
+        if traits:
+            self.traits[session_id] = dict(traits)
         return self.style, self.variant
 
-    def track(self, session_id: str, event: str) -> None:
+    def track(self, session_id: str, event: str, value: float | None = None) -> None:
         """Record the event after the same validation as the real client."""
         check_event(event)
-        self.tracked.append((session_id, event))
+        self.tracked.append((session_id, event, value))
 
     def flush(self) -> None:
         """Count the flush."""

@@ -179,8 +179,16 @@ def test_correct_exposed_session_sends_task_completed(
     result = manager.finish(session_id, "Booked R3 at 11:00.")
 
     assert result == {"session_id": session_id, "finished": True, "outcome": "correct"}
-    assert experiment.tracked == [(session_id, "task_completed")]
+    assert experiment.tracked == [
+        (session_id, "task_completed", None),
+        (session_id, "task_finished", 2),
+    ]
     assert experiment.flushes == 1
+    assert experiment.traits[session_id] == {
+        "agent_label": "gemini-test",
+        "source": "lab",
+        "scenario_kind": "aligned",
+    }
     row = _row(engine, session_id)
     assert (row["outcome"], row["final_state"], row["tool_call_count"]) == (
         "correct",
@@ -210,7 +218,10 @@ def test_incorrect_exposed_session_sends_task_wrong_booking(
     assert "booking" in _book_call(manager, session_id, request)
 
     assert manager.finish(session_id, "")["outcome"] == "incorrect"
-    assert experiment.tracked == [(session_id, "task_wrong_booking")]
+    assert experiment.tracked == [
+        (session_id, "task_wrong_booking", None),
+        (session_id, "task_finished", 2),
+    ]
 
 
 def test_session_without_styled_error_has_no_variant_and_sends_no_events(
@@ -298,12 +309,15 @@ def test_budget_exhaustion_finalises_and_scores_the_final_state(
         2,
     )
     # Events follow the scored final state.
-    assert experiment.tracked == [(session_id, "task_completed")]
+    assert experiment.tracked == [
+        (session_id, "task_completed", None),
+        (session_id, "task_finished", 2),
+    ]
     # Rejected calls are not in the transcript.
     assert len(_calls(engine, session_id)) == 2
     # finish_task still answers, with the stored outcome, and sends nothing more.
     assert manager.finish(session_id, "")["outcome"] == "budget_exhausted"
-    assert len(experiment.tracked) == 1
+    assert len(experiment.tracked) == 2
 
 
 def test_begin_and_finish_do_not_count_against_the_budget(
@@ -328,7 +342,10 @@ def test_finalisation_is_idempotent(
     second = manager.finish(session_id, "done again")
 
     assert second == first
-    assert experiment.tracked == [(session_id, "task_completed")]
+    assert experiment.tracked == [
+        (session_id, "task_completed", None),
+        (session_id, "task_finished", 2),
+    ]
     assert [c["tool"] for c in _calls(engine, session_id)].count("finish_task") == 1
     # Domain calls after finishing are refused and not recorded.
     assert _list_rooms(manager, session_id)["error"]["code"] == SESSION_NOT_FOUND

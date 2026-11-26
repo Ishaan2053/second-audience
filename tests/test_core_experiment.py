@@ -20,6 +20,7 @@ from flagsmith.models import DefaultFlag, ExperimentMetadata, Flag
 from second_audience.config import Settings, get_settings
 from second_audience.core.experiment import (
     TASK_COMPLETED,
+    TASK_FINISHED,
     TASK_WRONG_BOOKING,
     FlagsmithExperimentClient,
     NullExperimentClient,
@@ -54,7 +55,14 @@ def _client(resolved: object, cache_size: int = 16) -> tuple[FlagsmithExperiment
 def test_style_for_returns_the_variant_style_and_key() -> None:
     client, sdk = _client(_flag("prescriptive"))
     assert client.style_for("s-1") == (PRESCRIPTIVE, "prescriptive")
-    sdk.get_experiment_flag.assert_called_once_with(FLAG, identifier="s-1")
+    sdk.get_experiment_flag.assert_called_once_with(FLAG, identifier="s-1", traits=None)
+
+
+def test_style_for_sends_traits_with_the_evaluation() -> None:
+    client, sdk = _client(_flag("prescriptive"))
+    traits = {"agent_label": "gemini-test", "source": "lab", "scenario_kind": "trap"}
+    client.style_for("s-1", traits)
+    sdk.get_experiment_flag.assert_called_once_with(FLAG, identifier="s-1", traits=traits)
 
 
 def test_control_arm_keeps_its_variant_key() -> None:
@@ -131,7 +139,13 @@ def test_invalid_flag_value_gives_control_style() -> None:
 def test_track_sends_known_events(event: str) -> None:
     client, sdk = _client(_flag())
     client.track("s-1", event)
-    sdk.track_event.assert_called_once_with(event, identifier="s-1")
+    sdk.track_event.assert_called_once_with(event, identifier="s-1", value=None)
+
+
+def test_track_sends_a_numeric_value() -> None:
+    client, sdk = _client(_flag())
+    client.track("s-1", TASK_FINISHED, value=4)
+    sdk.track_event.assert_called_once_with(TASK_FINISHED, identifier="s-1", value=4)
 
 
 def test_track_rejects_unknown_events() -> None:
@@ -178,7 +192,7 @@ def test_null_client_returns_its_fixed_style_and_records_calls() -> None:
     client.track("s-1", TASK_COMPLETED)
     client.flush()
     assert client.resolved == ["s-1"]
-    assert client.tracked == [("s-1", TASK_COMPLETED)]
+    assert client.tracked == [("s-1", TASK_COMPLETED, None)]
     assert client.flushes == 1
     with pytest.raises(ValueError, match="unknown experiment event"):
         client.track("s-1", "nope")
