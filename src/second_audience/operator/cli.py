@@ -288,7 +288,8 @@ def report(
     drafter = None if no_llm else context.make_drafter(settings)
     written = write_narrative(analysis, drafter, settings.sa_operator_model)
     path = folder / "report.md"
-    path.write_text(render(analysis, written, saved.path.as_posix(), saved.note), encoding="utf-8")
+    text = render(analysis, written, saved.path.as_posix(), saved.note)
+    path.write_text(text, encoding="utf-8", newline="\n")
     typer.echo(f"Results: {saved.path.as_posix()} ({saved.note})")
     typer.echo(f"Prose: {written.author}")
     typer.echo(f"Decision: {analysis.decision.decision.value}")

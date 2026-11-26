@@ -173,5 +173,5 @@ def refresh_and_save(
         path = previous
     else:
         path = folder / f"results-{now:%Y%m%dT%H%M%SZ}.json"
-        path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8", newline="\n")
     return SavedResults(ExperimentResults.from_api(raw), path, refreshed, note)
