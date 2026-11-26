@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     sa_max_tool_calls: int = Field(default=12, gt=0)
     sa_session_idle_seconds: int = Field(default=600, gt=0)
     sa_field_sessions_per_ip_per_hour: int = Field(default=10, gt=0)
+    sa_field_enabled: bool = True
+    sa_max_concurrent_sessions: int = Field(default=50, gt=0)
+    sa_trust_proxy: bool = False
+    sa_git_commit: str | None = None
 
     @field_validator("sa_lab_models", mode="before")
     @classmethod
