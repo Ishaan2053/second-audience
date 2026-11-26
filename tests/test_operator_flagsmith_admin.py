@@ -147,6 +147,29 @@ def test_experiment_lifecycle_paths(run: Callable[..., Recorder]) -> None:
     ]
 
 
+def test_complete_sends_the_rollout_decision(run: Callable[..., Recorder]) -> None:
+    recorder = run(lambda args: (0, {"id": 5, "status": "completed"}, ""))
+    admin = _admin()
+    admin.complete_experiment(ENV, 5, "variant", 37)
+    admin.complete_experiment(ENV, 5, "control", None)
+    path = f"api/v1/environments/{ENV}/experiments/5/complete/"
+    assert [(args[:4], json.loads(body or "")) for args, body in recorder.calls] == [
+        (["api", path, "-X", "POST"], {"rollout_decision": "variant", "rollout_variant": 37}),
+        (["api", path, "-X", "POST"], {"rollout_decision": "control"}),
+    ]
+
+
+def test_feature_state_is_the_environment_default(run: Callable[..., Recorder]) -> None:
+    default = {"id": 1, "identity": None, "feature_segment": None, "enabled": True}
+    override = {"id": 2, "identity": None, "feature_segment": 9}
+    recorder = run(lambda args: (0, {"results": [default, override]}, ""))
+    assert _admin().feature_state(ENV, 10) == default
+    assert recorder.calls[0][0][1] == f"api/v1/environments/{ENV}/featurestates/?feature=10"
+    run(lambda args: (0, {"results": [override]}, ""))
+    with pytest.raises(FlagsmithAdminError, match="expected one environment default"):
+        _admin().feature_state(ENV, 10)
+
+
 def test_create_experiment_reuses_a_listed_one(run: Callable[..., Recorder]) -> None:
     listed = {"id": 5, "name": "error-style-v1", "feature": {"id": 10, "name": "error_style"}}
     recorder = run(lambda args: (0, {"results": [listed]}, ""))

@@ -220,6 +220,33 @@ class FlagsmithAdmin:
         )
         return started
 
+    def complete_experiment(
+        self, env: str, experiment_id: int, rollout_decision: str, rollout_variant: int | None
+    ) -> dict[str, Any]:
+        """End a running experiment and roll out `control` or a `variant`; irreversible.
+
+        `POST .../complete/` (spike findings, SA-02 question 8): `rollout_variant` is the
+        multivariate option ID and is sent only with `rollout_decision="variant"`.
+        """
+        body: dict[str, Any] = {"rollout_decision": rollout_decision}
+        if rollout_variant is not None:
+            body["rollout_variant"] = rollout_variant
+        completed: dict[str, Any] = self._api(
+            f"api/v1/environments/{env}/experiments/{experiment_id}/complete/", "POST", body
+        )
+        return completed
+
+    def feature_state(self, env: str, feature_id: int) -> dict[str, Any]:
+        """The environment's default state of one feature: value, enabled, variant weights."""
+        states = _items(self._api(f"api/v1/environments/{env}/featurestates/?feature={feature_id}"))
+        defaults = [s for s in states if s.get("identity") is None and not s.get("feature_segment")]
+        if len(defaults) != 1:
+            raise FlagsmithAdminError(
+                ["api", "featurestates"],
+                f"expected one environment default for feature {feature_id}, got {len(defaults)}",
+            )
+        return defaults[0]
+
     def refresh_results(self, env: str, experiment_id: int) -> None:
         """Ask Flagsmith to recompute results; allowed once every 5 minutes."""
         self._api(f"api/v1/environments/{env}/experiments/{experiment_id}/results/refresh/", "POST")

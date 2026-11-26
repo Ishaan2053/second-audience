@@ -17,7 +17,7 @@ Statuses: `pending`, `in progress`, `blocked`, `done`, `cut`. Update at the end 
 | SA-11 | Public deployment | done | #23 | #24, #25 | Render free, Oregon (Supabase is Tokyo; region fixed at creation). First field session verified with Claude Code. Two-network IP-hash check still open |
 | SA-12 | Operator: status and report | done | #26 | #27 | Interim live report: inconclusive (23/25 of 75 per arm); reconciliation exact. Gemini prose number-checked |
 | SA-13 | Operator: propose an experiment from failure logs | done | #28 | #29 | Live run proposed prescriptive + caution_note (not hard-coded); drafts not committed. Same-flag start needs a cleaned flag after SA-14 |
-| SA-14 | Operator: ship the decision with approval | pending | | | |
+| SA-14 | Operator: ship the decision with approval | done (code) | #30 | #31 | API path (`complete/`, verified in SA-02). Records the decision before verifying; smoke only after a `completed` read-back, as lab traffic, excluded from analysis. Tested with fakes and a read-only live dry run (refused, 23/25 of 75); no Flagsmith write while 680 runs. Development rehearsal (live AC) outstanding; `v0.3.0` tag still to do |
 | SA-15 | Demo kit: side-by-side transcript replay | pending | | | |
 | SA-16 | README, results write-up and documentation | pending | | | |
 | SA-17 | Release hardening, final results and submission | pending | | | |

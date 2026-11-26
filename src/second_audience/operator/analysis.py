@@ -35,12 +35,15 @@ OUTCOMES = ("correct", "incorrect", "no_booking", "budget_exhausted", "abandoned
 FROM_API = "Flagsmith API"
 FROM_DASHBOARD = "from dashboard"
 
+SMOKE_AGENT_LABEL = "sa-ship-smoke"
+"""The agent label of `sa ship`'s smoke sessions, which are checks, not experiment traffic."""
+
 
 class Decision(StrEnum):
-    """What the pre-registered decision rule says to do."""
+    """What the pre-registered decision rule says to do. Only `ship_variant` changes the flag."""
 
-    SHIP = "ship"
-    NO_SHIP = "do not ship"
+    SHIP_VARIANT = "ship_variant"
+    KEEP_CONTROL = "keep_control"
     INCONCLUSIVE = "inconclusive"
 
 
@@ -53,6 +56,8 @@ class RunState:
     metric_ids: dict[str, int]
     started_at: datetime
     commit: str
+    feature_id: int
+    variant_ids: dict[str, int]
 
     @classmethod
     def load(cls, path: Path) -> "RunState":
@@ -64,10 +69,17 @@ class RunState:
             metric_ids={str(k): int(v) for k, v in raw["metric_ids"].items()},
             started_at=datetime.fromisoformat(str(raw["started_at"]).replace("Z", "+00:00")),
             commit=str(raw["commit"]),
+            feature_id=int(raw["feature_id"]),
+            variant_ids={str(k): int(v) for k, v in raw["variant_ids"].items()},
         )
 
 
 # --- ledger predicates: these mirror what the server sends to Flagsmith (booking/sessions.py)
+
+
+def ship_smoke(record: SessionRecord) -> bool:
+    """A smoke session run by `sa ship`; excluded from every analysis and from evidence."""
+    return record.agent_label == SMOKE_AGENT_LABEL
 
 
 def in_experiment(record: SessionRecord) -> bool:
@@ -167,7 +179,13 @@ class DecisionResult:
 def decide(
     spec: ExperimentSpec, rows: list[MetricRow], exposures: dict[str, int], now: datetime
 ) -> DecisionResult:
-    """Apply the pre-registered rule (HYPOTHESIS.md section 10)."""
+    """Apply the pre-registered rule (HYPOTHESIS.md section 10).
+
+    `ship_variant` needs the variant's win probability at the threshold and no guardrail
+    credibly worse. `keep_control` means the evidence favours control: control's own win
+    probability (one minus the variant's) meets the threshold, or a guardrail is credibly
+    worse. Anything else is `inconclusive`, which also keeps control.
+    """
     rule = spec.stopping_rule
     arms = [arm.key for arm in spec.arms]
     met = stopping_rule_met(exposures, arms, rule.min_exposed_per_arm, rule.hard_end, now)
@@ -192,10 +210,10 @@ def decide(
         )
         return DecisionResult(Decision.INCONCLUSIVE, True, reasons)
     chance = primary.inference.chance_to_win
+    variant = spec.variants[0].key
     reasons.append(
-        f"Win probability of {spec.variants[0].key} on {primary.metric.name!r} is "
-        f"{chance:.3f} against a threshold of {threshold:g}"
-        f" ({'met' if chance >= threshold else 'not met'})."
+        f"Win probability on {primary.metric.name!r}: {variant} {chance:.3f}, control "
+        f"{1 - chance:.3f}, against a threshold of {threshold:g}."
     )
     worse = [r.metric.name for r in guardrails if r.credibly_worse()]
     for row in guardrails:
@@ -211,8 +229,16 @@ def decide(
                 f"{row.inference.ci_high:.3f}], {verdict}."
             )
     if chance >= threshold and not worse:
-        return DecisionResult(Decision.SHIP, True, reasons)
-    return DecisionResult(Decision.NO_SHIP, True, reasons)
+        reasons.append(f"{variant} meets the threshold and no guardrail is credibly worse.")
+        return DecisionResult(Decision.SHIP_VARIANT, True, reasons)
+    if worse:
+        reasons.append(f"{variant} is credibly worse on {', '.join(worse)}: control is kept.")
+        return DecisionResult(Decision.KEEP_CONTROL, True, reasons)
+    if 1 - chance >= threshold:
+        reasons.append("Control meets the threshold: control is kept.")
+        return DecisionResult(Decision.KEEP_CONTROL, True, reasons)
+    reasons.append("Neither arm meets the threshold: control is kept.")
+    return DecisionResult(Decision.INCONCLUSIVE, True, reasons)
 
 
 # --- reconciliation -------------------------------------------------------------------------
@@ -426,9 +452,10 @@ def analyse(
     records: list[SessionRecord],
     now: datetime,
 ) -> Analysis:
-    """Compute every section's numbers. Two-arm experiments only."""
+    """Compute every section's numbers, without `sa ship` smoke sessions. Two arms only."""
     if len(spec.arms) != 2 or spec.control.key != CONTROL_KEY:
         raise ValueError("sa report supports two-arm experiments (control and one variant)")
+    records = [r for r in records if not ship_smoke(r)]
     rows = metric_rows(spec, state, results, manual)
     exposures = flagsmith_exposures(spec, rows)
     breakdowns = {title: breakdown(spec, records, key) for title, key in BREAKDOWNS.items()}

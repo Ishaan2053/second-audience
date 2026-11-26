@@ -29,6 +29,7 @@ from second_audience.operator.analysis import (
     event_value,
     in_experiment,
     scored,
+    ship_smoke,
 )
 from second_audience.operator.gemini import JsonModel
 from second_audience.operator.narrative import unsupported_numbers
@@ -251,7 +252,7 @@ def build_evidence(
     taken_slugs: Iterable[str],
 ) -> Evidence:
     """Counts by arm and scenario kind, suggestion uptake, and sampled failing transcripts."""
-    finished = _finished(records)
+    finished = _finished(r for r in records if not ship_smoke(r))
     keys = sorted({(str(r.variant), r.scenario_kind) for r in finished})
     outcome_rows, suggestion_rows = [], []
     for arm, kind in keys:

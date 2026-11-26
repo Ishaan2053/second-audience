@@ -485,9 +485,11 @@ results, `manual.yaml`, saved files), `stats.py` (Wilson interval, chi-square, s
 - **Manual values:** where the API returns no inference, `reports/<slug>/manual.yaml`
   (`metrics: {<metric name>: {lift, ci_low, ci_high, chance_to_win}}`) fills it, marked
   "from dashboard".
-- **Decision:** `inconclusive` before the rule or without primary inference; `ship` when the
-  win probability reaches the threshold and no guardrail's lift interval lies entirely on its
-  bad side; otherwise `do not ship`.
+- **Decision:** `inconclusive` before the rule or without primary inference; `ship_variant`
+  when the variant's win probability reaches the threshold and no guardrail's lift interval
+  lies entirely on its bad side; `keep_control` when control's win probability (one minus the
+  variant's) reaches the threshold or a guardrail is credibly worse; otherwise
+  `inconclusive`. Only `ship_variant` changes the flag.
 - **Reconciliation** compares, per arm, the ledger's exposures and each metric's event sum
   with Flagsmith's, also counting the ledger only up to Flagsmith's `as_of`. A difference that
   vanishes at `as_of` is event latency; anything left is reported as unexplained.
@@ -532,6 +534,46 @@ drafts the next experiment from the source experiment's ledger sessions since it
 - **Next step for the reviewer:** move the spec to `experiments/<slug>.yaml` (where
   `sa status` and `sa report` look for it), add the slug to `HYPOTHESIS.md`, commit both,
   then `sa start experiments/<slug>.yaml`.
+
+**Ship (fixed in SA-14).** `sa ship <slug> [--dry-run]` (`ship.py`) takes the decision once,
+at the stopping point.
+
+- **Inputs:** the newest saved results file in `reports/<slug>/` (run `sa report` first),
+  `manual.yaml` and the ledger, through the same `analyse` as `sa report`, so the report and
+  the ship decision cannot differ. It refuses, changing nothing, when the stopping rule is not
+  met (no override), when no results are saved, when the experiment is not `running`, or when
+  `SA_SERVER_URL` or `SA_LAB_KEY` is unset (the smoke check needs the server, and must run as
+  lab traffic so it is never counted as field traffic).
+- **Plan:** prints the rule, every metric's per-arm numbers and inference, each step of the
+  rule, the decision and the exact Flagsmith change. For a guardrail with no inference it
+  also prints the per-arm ledger counts and the variant's wrong bookings on trap scenarios
+  (HYPOTHESIS.md section 10). `--dry-run` stops there. Otherwise the
+  human types `ship <slug>`; anything else aborts with no change.
+- **Change (API path):** `POST .../experiments/<id>/complete/` with `rollout_decision`
+  `variant` and `rollout_variant` (the option ID from the state file) for `ship_variant`, or
+  `control` for `keep_control` and `inconclusive`, which leaves the flag value as it is. The
+  call is documented in Flagsmith's API and was verified live on Development in SA-02
+  (question 8), so no guided dashboard steps are needed.
+- **Record first:** as soon as `complete/` succeeds, an `audit_log` row (action `ship`,
+  verification `pending`) and a "Decision" record marked "Verification pending" are written,
+  so no later failure (a read-back error, the smoke session, Ctrl-C) can leave an ended
+  experiment unrecorded. A re-run would refuse with "already ended".
+- **Verification:** reads the experiment back (`completed`, matching `rollout_decision`) and
+  the environment's default feature state (`GET .../featurestates/?feature=<id>`): enabled,
+  and serving the expected arm's value (a variant at 100%, or the default with every variant
+  at 0%). A read-back failure is a recorded problem, not a crash. Only if the read-back shows
+  the experiment `completed` does one scripted MCP session run against `SA_SERVER_URL`
+  (scenario `s01`, agent label `sa-ship-smoke`, lab traffic via `SA_LAB_KEY`); it waits 5 s
+  for edge propagation before every probe, including the first, so it cannot be enrolled in
+  the experiment that just ended, and tries up to 6 times. It makes the scenario's first
+  attempt and reads the style off the error payload. Sessions labelled `sa-ship-smoke` are
+  excluded from every analysis (`analysis.ship_smoke`) and from `sa propose` evidence.
+- **Record:** a second `audit_log` row (action `ship_verify`: the decision, reasons,
+  exposures, inference, guardrail ledger counts when a guardrail has no inference, results
+  file, rollout, read-back values, smoke style and any problems, `approved_by` = git
+  `user.name`), and the dated "Decision" section in `reports/<slug>/decision.md` is rewritten
+  with what was verified, replacing the pending record in `report.md`; later `sa report`
+  runs keep it at the end. Any problem after the change is recorded this way and exits 1.
 
 ### 3.9 Public endpoint
 

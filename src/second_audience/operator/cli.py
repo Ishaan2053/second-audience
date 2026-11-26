@@ -12,6 +12,7 @@ import typer
 
 from second_audience.config import Settings, get_settings
 from second_audience.core.ledger import Ledger, make_engine
+from second_audience.core.styles import ErrorStyle
 from second_audience.operator.analysis import Analysis, RunState, analyse, ledger_exposures
 from second_audience.operator.doctor import Report, run_checks
 from second_audience.operator.flagsmith_admin import FlagsmithAdmin, FlagsmithAdminError
@@ -30,8 +31,24 @@ from second_audience.operator.repo import GitError, Repo
 from second_audience.operator.report import render, report_dir, status_lines
 from second_audience.operator.results import (
     ExperimentResults,
+    latest_saved,
     load_manual,
     refresh_and_save,
+)
+from second_audience.operator.ship import (
+    DECISION_FILE,
+    Outcome,
+    ShipPlan,
+    ShipRefusedError,
+    append_record,
+    audit_detail,
+    complete,
+    decision_record,
+    guardrail_ledger_counts,
+    plan_ship,
+    read_back,
+    smoke_session,
+    smoke_until,
 )
 from second_audience.operator.spec import ExperimentSpec, load_spec
 from second_audience.operator.start import (
@@ -70,6 +87,7 @@ class Context:
     make_drafter: Callable[[Settings], Drafter | None]
     sleep: Callable[[float], None]
     make_proposer: Callable[[Settings], JsonModel | None]
+    smoke: Callable[[Settings], ErrorStyle]
 
 
 def _drafter(settings: Settings) -> Drafter | None:
@@ -103,6 +121,7 @@ def make_context() -> Context:
         make_drafter=_drafter,
         sleep=time.sleep,
         make_proposer=_proposer,
+        smoke=smoke_session,
     )
 
 
@@ -313,7 +332,9 @@ def report(
     drafter = None if no_llm else context.make_drafter(settings)
     written = write_narrative(analysis, drafter, settings.sa_operator_model)
     path = folder / "report.md"
-    text = render(analysis, written, saved.path.as_posix(), saved.note)
+    shipped = folder / DECISION_FILE
+    record = shipped.read_text(encoding="utf-8") if shipped.exists() else None
+    text = render(analysis, written, saved.path.as_posix(), saved.note, record)
     path.write_text(text, encoding="utf-8", newline="\n")
     typer.echo(f"Results: {saved.path.as_posix()} ({saved.note})")
     typer.echo(f"Prose: {written.author}")
@@ -390,3 +411,170 @@ def propose(
         f"`sa status` and `sa report` look for it), add a {slug} entry to HYPOTHESIS.md, "
         f"commit both, then `sa start {target.as_posix()}` (try --dry-run first)."
     )
+
+
+def _print_ship_plan(plan: ShipPlan) -> None:
+    """The rule, the numbers it was applied to, the decision, and the exact changes."""
+    analysis = plan.analysis
+    rule = analysis.spec.stopping_rule
+    typer.echo(
+        f"\nResults: {plan.results_file.as_posix()} (Flagsmith as of {analysis.results.as_of})"
+    )
+    typer.echo(
+        f"Rule (HYPOTHESIS.md section 10): ship {analysis.spec.variants[0].key} only if its win "
+        f"probability on {analysis.spec.primary_metric.name!r} is at least "
+        f"{rule.win_probability_threshold:g} and no guardrail's lift interval lies entirely on "
+        "its bad side; otherwise keep control."
+    )
+    typer.echo("Numbers:")
+    for row in analysis.rows:
+        stats = ", ".join(
+            f"{arm} n={s.n} mean={s.mean:.3f}" if s and s.mean is not None else f"{arm} n/a"
+            for arm, s in row.stats.items()
+        )
+        inference = (
+            f"win probability {row.inference.chance_to_win:.3f}, lift {row.inference.lift:.3f} "
+            f"[{row.inference.ci_low:.3f}, {row.inference.ci_high:.3f}] ({row.inference_source})"
+            if row.inference
+            else "no inference"
+        )
+        typer.echo(f"  {row.metric.role} {row.metric.name}: {stats}; {inference}")
+    ledger_counts = guardrail_ledger_counts(analysis)
+    for name, arms in ledger_counts.items():
+        counts = ", ".join(f"{arm} {c['count']} of {c['scored']}" for arm, c in arms.items())
+        typer.echo(f"  ledger counts for {name} (scored sessions): {counts}")
+    if ledger_counts:
+        trap = ", ".join(r.session_id for r in analysis.trap_wrong) or "none"
+        typer.echo(
+            f"  {analysis.spec.variants[0].key} wrong bookings on trap scenarios (ledger): "
+            f"{len(analysis.trap_wrong)} ({trap})"
+        )
+    typer.echo("Rule applied:")
+    for reason in analysis.decision.reasons:
+        typer.echo(f"  - {reason}")
+    typer.echo(f"Decision: {plan.decision.value}")
+    typer.echo("Changes in Flagsmith:")
+    for change in plan.changes():
+        typer.echo(f"  - {change}")
+
+
+@app.command()
+def ship(
+    slug: SlugArgument,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Print the decision and the changes, then exit.")
+    ] = False,
+) -> None:
+    """Apply the decision rule; on typed confirmation end the experiment and roll it out."""
+    context = make_context()
+    spec, run_state = _experiment(slug)
+    settings = context.load_settings()
+    admin = context.make_admin(settings)
+    folder = report_dir(slug)
+    results_file = latest_saved(folder)
+    if results_file is None:
+        raise _fail(f"ship: no saved results in {folder.as_posix()}; run `sa report {slug}` first")
+    raw = json.loads(results_file.read_text(encoding="utf-8"))
+    analysis, ledger = _analyse(context, settings, spec, run_state, ExperimentResults.from_api(raw))
+    try:
+        experiment = admin.get_experiment(run_state.environment_key, run_state.experiment_id)
+        plan = plan_ship(analysis, experiment, results_file)
+    except ShipRefusedError as error:
+        for reason in analysis.decision.reasons:
+            typer.echo(f"  - {reason}")
+        raise _fail(f"ship: refused: {error}; nothing was changed") from error
+    except FlagsmithAdminError as error:
+        raise _fail(f"ship: {error}") from error
+    _print_ship_plan(plan)
+    if settings.sa_server_url is None:
+        raise _fail("ship: SA_SERVER_URL is not set, so the served style cannot be checked")
+    if settings.sa_lab_key is None:
+        raise _fail(
+            "ship: SA_LAB_KEY is not set, so the smoke session would count as field traffic"
+        )
+    if dry_run:
+        typer.echo("\nDry run: nothing was changed.")
+        return
+    try:
+        approver = context.open_repo(Path.cwd()).user_name()
+    except GitError as error:
+        raise _fail(f"ship: {error}") from error
+    phrase = f"ship {slug}"
+    typed = typer.prompt(f"\nType `{phrase}` to end the experiment and apply this decision")
+    if typed.strip() != phrase:
+        raise _fail("ship: confirmation did not match; nothing was changed")
+    try:
+        outcome = complete(plan, admin)
+    except FlagsmithAdminError as error:
+        raise _fail(
+            f"ship: the complete/ call failed: {error}\nNothing was recorded. Check experiment "
+            f"{run_state.experiment_id} in Flagsmith before running `sa ship` again."
+        ) from error
+    # The experiment has ended: record that now, so no later failure can leave it unrecorded.
+    now = context.now()
+    pending = _record(ledger, folder, plan, outcome, approver, now, None)
+    try:
+        read_back(plan, admin, outcome)
+        _smoke(context, settings, plan, outcome)
+    except KeyboardInterrupt:
+        outcome.problems.append("interrupted before verification finished")
+    outcome.checked = True
+    _record(ledger, folder, plan, outcome, approver, now, pending)
+    typer.echo(
+        f"\nExperiment {slug} is {outcome.experiment.get('status')}; flag serves "
+        f"{outcome.served!r} (expected {plan.serve_arm}). Approved by {approver}. Recorded in "
+        f"the audit log and {(folder / DECISION_FILE).as_posix()}."
+    )
+    if outcome.problems:
+        raise _fail(
+            "ship: verification failed:\n" + "\n".join(f"  - {p}" for p in outcome.problems)
+        )
+
+
+def _record(
+    ledger: Ledger,
+    folder: Path,
+    plan: ShipPlan,
+    outcome: Outcome,
+    approver: str,
+    now: datetime,
+    replacing: str | None,
+) -> str:
+    """Write the audit row and the decision record for the outcome so far; returns the record.
+
+    The first call (`ship`) follows the irreversible change; the second (`ship_verify`) adds
+    what was verified and replaces the first record in the report.
+    """
+    action = "ship_verify" if outcome.checked else "ship"
+    detail = json.dumps(audit_detail(plan, outcome), sort_keys=True)
+    try:
+        ledger.audit(action, plan.analysis.spec.slug, detail, approver)
+    except Exception as error:  # the change is made; the file record below must still be written
+        outcome.problems.append(f"audit log write ({action}) failed: {type(error).__name__}")
+    record = decision_record(plan, outcome, approver, now)
+    append_record(folder, record, replacing)
+    return record
+
+
+def _smoke(context: Context, settings: Settings, plan: ShipPlan, outcome: Outcome) -> None:
+    """Run smoke sessions until the server serves the expected style; note any mismatch.
+
+    Skipped unless the read-back shows the experiment ended, so no smoke session can be
+    enrolled in it.
+    """
+    if not outcome.smoke_safe:
+        outcome.problems.append(
+            "smoke session skipped: the experiment was not read back as completed"
+        )
+        return
+    expected = ErrorStyle.from_flag_value(plan.serve_value)
+    try:
+        outcome.observed = smoke_until(lambda: context.smoke(settings), expected, context.sleep)
+    except Exception as error:  # any network or protocol failure: the change is already made
+        outcome.problems.append(f"smoke session failed: {type(error).__name__}: {error}")
+        return
+    typer.echo(f"Smoke session: served style {outcome.observed.model_dump()}")
+    if outcome.observed != expected:
+        outcome.problems.append(
+            f"smoke session saw {outcome.observed.model_dump()}, expected {expected.model_dump()}"
+        )

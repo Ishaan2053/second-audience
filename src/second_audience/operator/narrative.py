@@ -28,7 +28,11 @@ NARRATIVE_INSTRUCTIONS = (
     "styles of error message that an AI agent receives from a room-booking tool server. "
     "Use only the facts in the JSON you are given. Copy every number exactly as it is written "
     "there, and write no other number, date, percentage or count. Do not round, convert or "
-    "combine numbers. Do not name a winner unless the decision is 'ship'. Plain sentences, no "
+    "combine numbers. Do not name a winner unless the decision is 'ship_variant' or "
+    "'keep_control'. When 'keep_control_reason' is 'guardrail_credibly_worse', control is kept "
+    "only because the variant was credibly worse on the guardrails in "
+    "'guardrails_credibly_worse': do not call control the winner on, or better on, the primary "
+    "metric. Plain sentences, no "
     "lists, no Markdown headings. 'summary': three or four sentences stating the question, "
     "what was measured, and the decision. 'decision': two or three sentences explaining how "
     "the pre-registered rule produced the decision."
@@ -76,6 +80,12 @@ def facts(analysis: Analysis) -> dict[str, Any]:
         "rule_steps": analysis.decision.reasons,
         "win_probability_threshold": f"{rule.win_probability_threshold:g}",
     }
+    if analysis.decision.decision is Decision.KEEP_CONTROL:
+        worse = credibly_worse_guardrails(analysis)
+        facts["keep_control_reason"] = (
+            "guardrail_credibly_worse" if worse else "control_meets_threshold"
+        )
+        facts["guardrails_credibly_worse"] = worse
     for row in analysis.rows:
         entry: dict[str, Any] = {
             "per_arm": {
@@ -89,6 +99,15 @@ def facts(analysis: Analysis) -> dict[str, Any]:
             entry["lift_interval"] = [f"{row.inference.ci_low:.3f}", f"{row.inference.ci_high:.3f}"]
         facts[row.metric.name] = entry
     return facts
+
+
+def credibly_worse_guardrails(analysis: Analysis) -> list[str]:
+    """Guardrails on which the variant is credibly worse; the reason `keep_control` can hold."""
+    return [
+        row.metric.name
+        for row in analysis.rows
+        if row.metric.role == "guardrail" and row.credibly_worse()
+    ]
 
 
 def _normalise(number: str) -> str:
@@ -123,12 +142,20 @@ def template(analysis: Analysis) -> Narrative:
         )
     else:
         summary += f"Under the pre-registered rule the decision is: {decision.decision.value}."
+    worse = credibly_worse_guardrails(analysis)
+    keep_control = (
+        f"The variant was credibly worse on the guardrail {', '.join(worse)}, so the "
+        "informative style is kept; this does not make control the winner on the primary metric."
+        if worse
+        else "Control met the win-probability threshold on the primary metric, so the "
+        "informative style is kept."
+    )
     explanation = {
-        Decision.SHIP: "The variant met the win-probability threshold and no guardrail was "
-        "credibly worse, so the prescriptive style is shipped.",
-        Decision.NO_SHIP: "The variant did not meet every condition of the rule, so the "
-        "informative style is kept.",
-        Decision.INCONCLUSIVE: "The rule could not be applied yet, so no change is made.",
+        Decision.SHIP_VARIANT: "The variant met the win-probability threshold and no "
+        "guardrail was credibly worse, so the prescriptive style is shipped.",
+        Decision.KEEP_CONTROL: keep_control,
+        Decision.INCONCLUSIVE: "Neither arm met the threshold, or the rule could not be applied "
+        "yet, so the informative style is kept.",
     }[decision.decision]
     return Narrative(summary=summary, decision=explanation)
 

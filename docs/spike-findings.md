@@ -602,3 +602,29 @@ and `gemini-2.5-pro` start auto-routing to newer models on 2026-12-01, after the
   still has experiment 1's default value, its `prescriptive` variant and an active
   experiment. Starting a proposal on the same flag needs SA-14 (ship) and a cleaned-up flag
   first.
+
+## Operator ship (SA-14)
+
+- **API path, not dashboard steps.** `sa ship` ends the experiment with `POST
+  .../experiments/<id>/complete/` (question 8). `rollout_decision: "variant"` was verified
+  live in SA-02; `"control"` is one of the serializer's documented choices but has not yet
+  been run live. Both are exercised against fakes in tests.
+- **The flag's live state is readable.** `GET api/v1/environments/<key>/featurestates/?feature=<id>`
+  returns the environment default with `feature_state_value`, `enabled` and
+  `multivariate_feature_state_values[].percentage_allocation`. While experiment 680 runs, the
+  default serves control with `prescriptive` at 0%; the experiment's 50/50 split is on the
+  experiment's own rollout, not on this state. SA-02 saw a shipped variant served as
+  `SPLIT; weight=100.0`, so `sa ship` expects the winning option at 100% after
+  `rollout_decision: "variant"`.
+- **Never smoke-test a running experiment.** The smoke session's first attempt is a styled
+  error, so on a running experiment it would be exposed and counted. `sa ship` runs it only
+  when the read-back shows the experiment `completed`, waits 5 s for edge propagation before
+  the first probe too, sends it as lab traffic (`SA_LAB_KEY` is required) and excludes the
+  `sa-ship-smoke` label from analysis and evidence. The live check during SA-14 was limited
+  to a read-only `--dry-run` (refused: 23 and 25 exposed per arm against 75).
+- **`complete/` is irreversible, so the record comes first.** A re-run after an ended
+  experiment refuses ("already ended"), so the decision is recorded the moment `complete/`
+  succeeds; read-back and smoke failures become recorded problems, not crashes.
+- **Not yet run end to end.** The full flow against a throwaway Development experiment was
+  not run in SA-14, to avoid any Flagsmith write while experiment 680 is live; it belongs
+  before the Production run in SA-17.

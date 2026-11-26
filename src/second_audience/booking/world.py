@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import date, time, timedelta
 from enum import StrEnum
-from typing import ClassVar, Literal, Self
+from typing import Any, ClassVar, Literal, Self
 
 SLOT_MINUTES = 30
 WEEK_START = date(2027, 3, 15)  # Monday
@@ -50,6 +50,18 @@ class BookingRequest:
     end: time
     attendees: int
     title: str
+
+    def tool_arguments(self, session_id: str) -> dict[str, Any]:
+        """The `book_room` arguments for this request, as a scripted client sends them."""
+        return {
+            "session_id": session_id,
+            "room_id": self.room_id,
+            "date": self.date.isoformat(),
+            "start": format_time(self.start),
+            "end": format_time(self.end),
+            "attendees": self.attendees,
+            "title": self.title,
+        }
 
 
 @dataclass(frozen=True, slots=True)
