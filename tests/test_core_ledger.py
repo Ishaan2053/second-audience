@@ -7,7 +7,7 @@ Postgres database. They work in a throwaway schema that is dropped afterwards.
 import threading
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -19,6 +19,7 @@ from second_audience.core.ledger import (
     ClaimedRun,
     Ledger,
     PlannedRun,
+    RequestStatus,
     UnknownSessionError,
     audit_log,
     lab_runs,
@@ -199,6 +200,43 @@ def test_plan_runs_skips_duplicates_and_keeps_order(ledger: Ledger) -> None:
         ("s01", 2),
     ]
     assert claimed[3] is None
+
+
+def test_requeue_returns_runs_to_planned(ledger: Ledger) -> None:
+    ledger.plan_runs([PlannedRun("m1", "s01", 1), PlannedRun("m1", "s02", 1)])
+    a = ledger.claim_next_run("m1")
+    b = ledger.claim_next_run("m1")
+    assert a is not None
+    assert b is not None
+    ledger.requeue_run(a.run_id)
+    assert ledger.run_counts() == {"m1": {"planned": 1, "running": 1}}
+    assert ledger.requeue_stale_runs(datetime.now(UTC) - timedelta(minutes=5)) == 0
+    assert ledger.requeue_stale_runs(datetime.now(UTC) + timedelta(seconds=1)) == 1
+    assert ledger.run_counts() == {"m1": {"planned": 2}}
+
+
+def test_max_replicates_per_model(ledger: Ledger) -> None:
+    assert ledger.max_replicates() == {}
+    ledger.plan_runs([PlannedRun("m1", "s01", 1), PlannedRun("m1", "s01", 3)])
+    ledger.plan_runs([PlannedRun("m2", "s02", 2)])
+    assert ledger.max_replicates() == {"m1": 3, "m2": 2}
+
+
+def test_model_requests_exclude_quota_refusals(ledger: Ledger) -> None:
+    ledger.plan_runs([PlannedRun("m1", "s01", 1), PlannedRun("m1", "s02", 1)])
+    a = ledger.claim_next_run("m1")
+    b = ledger.claim_next_run("m1")
+    assert a is not None
+    assert b is not None
+    for status in (RequestStatus.OK, RequestStatus.RATE_LIMITED, RequestStatus.OK):
+        ledger.record_model_request("m1", a.run_id, status)
+    ledger.record_model_request("m1", b.run_id, RequestStatus.QUOTA_EXHAUSTED)
+    ledger.record_model_request("m2", None, RequestStatus.ERROR)
+    ledger.complete_run(a.run_id, "sess-a")
+    since = datetime.now(UTC) - timedelta(minutes=1)
+    assert ledger.model_requests_since(since) == {"m1": 2, "m2": 1}
+    assert ledger.model_requests_since(datetime.now(UTC) + timedelta(minutes=1)) == {}
+    assert ledger.requests_per_done_run() == {"m1": 2.0}
 
 
 def test_complete_fail_and_counts(ledger: Ledger, engine: Engine) -> None:
