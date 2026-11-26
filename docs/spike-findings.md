@@ -23,6 +23,19 @@ Surprises found while building, with evidence. The Flagsmith questions are answe
 - **SQLite drops the UTC offset on read** even with `DateTime(timezone=True)`. The ledger
   uses a small `UtcDateTime` type that re-attaches UTC, so both backends return aware UTC
   timestamps.
+- **The hosted ledger is Supabase Postgres (free plan).** On 2026-11-26 the `network` ledger
+  suite passed against it (22 passed, about 200 s, mostly round-trip latency from creating a
+  schema per test).
+  - **IPv6 only on the direct host.** The direct host `db.<ref>.supabase.co:5432` is
+    IPv6-only on the free plan. It worked from the developer's network, but an IPv4-only
+    host will not reach it. For the public deployment (SA-11), use the **session pooler**
+    URI from the dashboard's Connect dialog (`aws-<n>-<region>.pooler.supabase.com:5432`,
+    user `postgres.<ref>`) with `?sslmode=require`.
+  - **Not the transaction pooler.** Port 6543 does not support prepared statements, which
+    psycopg 3 uses automatically.
+  - **Keep the Data API off.** The ledger creates its tables in `public`, which Supabase
+    can expose over REST.
+  - **Weekly pause.** Free projects pause after a week of inactivity.
 
 ## Flagsmith spike (SA-02)
 
