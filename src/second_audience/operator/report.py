@@ -310,8 +310,10 @@ def _decision(a: Analysis, written: Written) -> list[str]:
     return lines
 
 
-def render(a: Analysis, written: Written, results_file: str, note: str) -> str:
-    """The full Markdown report."""
+def render(
+    a: Analysis, written: Written, results_file: str, note: str, shipped: str | None = None
+) -> str:
+    """The full Markdown report; `shipped` is the dated record `sa ship` wrote, if any."""
     lines = [
         f"# Report: {a.spec.slug}",
         "",
@@ -334,6 +336,8 @@ def render(a: Analysis, written: Written, results_file: str, note: str) -> str:
     ]
     for section in sections:
         lines += [*section(), ""]
+    if shipped is not None:
+        lines += [shipped.rstrip("\n"), ""]
     return "\n".join(lines)
 
 

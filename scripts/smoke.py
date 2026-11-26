@@ -23,7 +23,6 @@ from mcp.client.streamable_http import create_mcp_http_client, streamable_http_c
 
 from second_audience.booking.scenarios import SCENARIOS, Scenario, get_scenario
 from second_audience.booking.sessions import AGENT_LABEL_HEADER, LAB_KEY_HEADER
-from second_audience.booking.world import BookingRequest, format_time
 from second_audience.config import get_settings
 from second_audience.core.ledger import Ledger, SessionSummary, make_engine
 
@@ -39,31 +38,18 @@ async def _call(client: Client, tool: str, arguments: dict[str, Any]) -> dict[st
     return result.structured_content
 
 
-def _booking_arguments(session_id: str, request: BookingRequest) -> dict[str, Any]:
-    """The book_room arguments for a booking request."""
-    return {
-        "session_id": session_id,
-        "room_id": request.room_id,
-        "date": request.date.isoformat(),
-        "start": format_time(request.start),
-        "end": format_time(request.end),
-        "attendees": request.attendees,
-        "title": request.title,
-    }
-
-
 async def _play(client: Client, scenario: Scenario) -> str:
     """Run one scripted session and return its session ID."""
     started = await _call(client, "begin_task", {"scenario_id": scenario.id})
     session_id: str = started["session_id"]
-    error = await _call(client, "book_room", _booking_arguments(session_id, scenario.first_attempt))
+    error = await _call(client, "book_room", scenario.first_attempt.tool_arguments(session_id))
     if "error" not in error:
         raise RuntimeError(f"{scenario.id}: the first attempt did not fail: {error}")
     corrected = error.get("corrected_call")
     if corrected is not None:
         await _call(client, corrected["tool"], corrected["arguments"])
     else:
-        await _call(client, "book_room", _booking_arguments(session_id, scenario.solution))
+        await _call(client, "book_room", scenario.solution.tool_arguments(session_id))
     await _call(client, "finish_task", {"session_id": session_id, "summary": "smoke run"})
     return session_id
 

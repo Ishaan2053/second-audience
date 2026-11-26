@@ -301,7 +301,13 @@ class Workspace:
         (root / "experiments" / ".state").mkdir(parents=True, exist_ok=True)
         if not (root / "experiments" / SPEC_SOURCE.name).exists():
             shutil.copy(SPEC_SOURCE, root / "experiments" / SPEC_SOURCE.name)
-        state = {"experiment_id": 680, "environment_key": "envkey", "metric_ids": {}}
+        state = {
+            "experiment_id": 680,
+            "environment_key": "envkey",
+            "metric_ids": {},
+            "feature_id": 1,
+            "variant_ids": {"prescriptive": 2},
+        }
         (root / "experiments" / ".state" / f"{SLUG}.json").write_text(
             json.dumps({**state, "started_at": STARTED, "commit": "abc123"}), encoding="utf-8"
         )
@@ -332,6 +338,7 @@ class Workspace:
             make_drafter=lambda s: None,
             sleep=lambda seconds: None,
             make_proposer=lambda s: model,
+            smoke=lambda s: pytest.fail("sa propose runs no smoke session"),
         )
         monkeypatch.setattr(cli, "make_context", lambda: self.context)
 
