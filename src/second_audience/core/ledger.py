@@ -541,25 +541,7 @@ class Ledger:
                 .order_by(sessions.c.finished_at.desc(), sessions.c.session_id.desc())
                 .limit(limit)
             ).all()
-            calls: dict[str, list[ToolCallRecord]] = defaultdict(list)
-            if rows:
-                for call in conn.execute(
-                    select(tool_calls)
-                    .where(tool_calls.c.session_id.in_([r.session_id for r in rows]))
-                    .order_by(tool_calls.c.session_id, tool_calls.c.seq)
-                ):
-                    calls[call.session_id].append(
-                        ToolCallRecord(
-                            seq=call.seq,
-                            tool=call.tool,
-                            arguments=call.arguments,
-                            result=call.result,
-                            result_truncated=call.result_truncated,
-                            error_code=call.error_code,
-                            styled=call.styled,
-                            at=call.at,
-                        )
-                    )
+        calls = self.tool_calls_for(r.session_id for r in rows)
         return [
             FailingSession(
                 session_id=r.session_id,
@@ -573,10 +555,36 @@ class Ledger:
                 final_state=r.final_state,
                 tool_call_count=r.tool_call_count,
                 finished_at=r.finished_at,
-                tool_calls=calls[r.session_id],
+                tool_calls=calls.get(r.session_id, []),
             )
             for r in rows
         ]
+
+    def tool_calls_for(self, session_ids: Iterable[str]) -> dict[str, list[ToolCallRecord]]:
+        """Transcripts of the given sessions in call order; sessions without calls are absent."""
+        ids = list(session_ids)
+        if not ids:
+            return {}
+        calls: dict[str, list[ToolCallRecord]] = defaultdict(list)
+        with self._engine.connect() as conn:
+            for call in conn.execute(
+                select(tool_calls)
+                .where(tool_calls.c.session_id.in_(ids))
+                .order_by(tool_calls.c.session_id, tool_calls.c.seq)
+            ):
+                calls[call.session_id].append(
+                    ToolCallRecord(
+                        seq=call.seq,
+                        tool=call.tool,
+                        arguments=call.arguments,
+                        result=call.result,
+                        result_truncated=call.result_truncated,
+                        error_code=call.error_code,
+                        styled=call.styled,
+                        at=call.at,
+                    )
+                )
+        return dict(calls)
 
     def session_summaries(self, session_ids: Iterable[str]) -> list[SessionSummary]:
         """Return the summaries of the given sessions, ordered by start time."""
