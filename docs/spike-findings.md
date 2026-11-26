@@ -182,6 +182,26 @@ experiment. Dedicated SQLite ledger, `plan --replicates 2` then `plan --replicat
   wrong confirmation left Flagsmith with no features or metrics; the typed slug created and
   started experiment 665; a second run reused every object and reported it as running.
 
+## Status and report (SA-12)
+
+- **A refused refresh is HTTP 429.** Inside the 5-minute window the CLI prints
+  `{"detail":"A refresh was requested recently. Try again later. Expected available in 280
+  seconds."}` and `POST .../results/refresh/ returned 429 Too Many Requests` on stderr.
+  `sa report` matches "requested recently" and carries on with the latest computed results.
+- **A `mean` metric has the same shape as `occurrence`.** For "Tool calls per session" the
+  arm's `sum` is the total of `task_finished` values and `sum_squares` their squares (control
+  `n=6, sum=26, sum_squares=114` on 2026-11-26). `sum / n` is the mean per exposed identity.
+- **Inference stays `null` at small samples.** At 23 and 25 exposed identities per arm every
+  metric's `inference.prescriptive` was `null`, and `srm_p_value` was `null` too, so the
+  report's split check uses its own chi-square.
+- **First live reconciliation was exact.** At 17:51 UTC on 2026-11-26 the ledger and
+  Flagsmith agreed on every measure: exposures 23 and 25, tool-call sums 102 and 97,
+  completions 23 and 23, wrong bookings 0 and 0.
+- **Gemini 503 on a single request.** The first report with prose got `503 UNAVAILABLE`
+  ("high demand") and fell back to the template as designed. The narrative client now enables
+  the SDK's own retry (`HttpRetryOptions(attempts=3)`, which retries 408, 429 and 5xx);
+  one report is one request, so no quota pacing is at stake.
+
 ## Flagsmith spike (SA-02)
 
 Run on 2026-11-26 against the `Development` environment of project `second-audience`

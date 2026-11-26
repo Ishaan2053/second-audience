@@ -236,6 +236,25 @@ class SessionSummary:
     final_state: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class SessionRecord:
+    """Every column of a session row; what `sa status` and `sa report` count."""
+
+    session_id: str
+    scenario_id: str
+    scenario_kind: str
+    source: str
+    agent_label: str
+    variant: str | None
+    in_experiment: bool | None
+    started_at: datetime
+    exposed_at: datetime | None
+    finished_at: datetime | None
+    outcome: str | None
+    final_state: str | None
+    tool_call_count: int
+
+
 def make_engine(settings: Settings) -> Engine:
     """Create the ledger engine from `SA_DATABASE_URL`; Postgres connections are pre-pinged."""
     url = make_url(settings.sa_database_url.get_secret_value())
@@ -580,6 +599,33 @@ class Ledger:
                 in_experiment=r.in_experiment,
                 outcome=r.outcome,
                 final_state=r.final_state,
+            )
+            for r in rows
+        ]
+
+    def sessions_since(self, since: datetime) -> list[SessionRecord]:
+        """Every session started at or after `since`, oldest first."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(sessions)
+                .where(sessions.c.started_at >= since)
+                .order_by(sessions.c.started_at, sessions.c.session_id)
+            ).all()
+        return [
+            SessionRecord(
+                session_id=r.session_id,
+                scenario_id=r.scenario_id,
+                scenario_kind=r.scenario_kind,
+                source=r.source,
+                agent_label=r.agent_label,
+                variant=r.variant,
+                in_experiment=r.in_experiment,
+                started_at=r.started_at,
+                exposed_at=r.exposed_at,
+                finished_at=r.finished_at,
+                outcome=r.outcome,
+                final_state=r.final_state,
+                tool_call_count=r.tool_call_count,
             )
             for r in rows
         ]

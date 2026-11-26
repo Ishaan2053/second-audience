@@ -1,6 +1,7 @@
 """`sa`: the operator CLI. Every change to Flagsmith needs a typed human confirmation."""
 
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,9 +12,18 @@ import typer
 
 from second_audience.config import Settings, get_settings
 from second_audience.core.ledger import Ledger, make_engine
+from second_audience.operator.analysis import Analysis, RunState, analyse, ledger_exposures
 from second_audience.operator.doctor import Report, run_checks
 from second_audience.operator.flagsmith_admin import FlagsmithAdmin, FlagsmithAdminError
+from second_audience.operator.narrative import Drafter, gemini_drafter, write_narrative
 from second_audience.operator.repo import GitError, Repo
+from second_audience.operator.report import render, report_dir, status_lines
+from second_audience.operator.results import (
+    ExperimentResults,
+    load_manual,
+    refresh_and_save,
+)
+from second_audience.operator.spec import ExperimentSpec, load_spec
 from second_audience.operator.start import (
     Plan,
     StartRefusedError,
@@ -33,6 +43,7 @@ app = typer.Typer(
 )
 
 SpecArgument = Annotated[Path, typer.Argument(help="Experiment spec file (YAML).")]
+SlugArgument = Annotated[str, typer.Argument(help="Experiment slug (experiments/<slug>.yaml).")]
 
 
 @dataclass(frozen=True)
@@ -45,6 +56,15 @@ class Context:
     open_repo: Callable[[Path], Repo]
     open_ledger: Callable[[Settings], Ledger]
     now: Callable[[], datetime]
+    make_drafter: Callable[[Settings], Drafter | None]
+    sleep: Callable[[float], None]
+
+
+def _drafter(settings: Settings) -> Drafter | None:
+    """A Gemini drafter for the report's prose, or `None` without a model key."""
+    if settings.gemini_api_key is None:
+        return None
+    return gemini_drafter(settings.gemini_api_key.get_secret_value(), settings.sa_operator_model)
 
 
 def make_context() -> Context:
@@ -56,6 +76,8 @@ def make_context() -> Context:
         open_repo=Repo.discover,
         open_ledger=lambda settings: Ledger(make_engine(settings)),
         now=lambda: datetime.now(UTC),
+        make_drafter=_drafter,
+        sleep=time.sleep,
     )
 
 
@@ -172,3 +194,103 @@ def start(
         f"\nStarted experiment {plan.spec.slug} (id {state['experiment_id']}) at "
         f"{state['started_at']}, commit {state['commit'][:12]}, approved by {approver}."
     )
+
+
+def _experiment(slug: str) -> tuple[ExperimentSpec, RunState]:
+    """The spec and the state `sa start` recorded for this slug."""
+    spec_path = DEFAULT_SPEC.parent / f"{slug}.yaml"
+    try:
+        spec = load_spec(spec_path)
+        run_state = RunState.load(state_path(spec_path, slug))
+    except FileNotFoundError as error:
+        raise _fail(f"{slug}: {error.filename} not found; has `sa start` run?") from error
+    except ValueError as error:
+        raise _fail(f"{slug}: {error}") from error
+    return spec, run_state
+
+
+def _analyse(
+    context: Context,
+    settings: Settings,
+    spec: ExperimentSpec,
+    run_state: RunState,
+    results: ExperimentResults,
+) -> tuple[Analysis, Ledger]:
+    """Combine Flagsmith results, the manual overlay and the ledger rows since the start."""
+    ledger = context.open_ledger(settings)
+    records = ledger.sessions_since(run_state.started_at)
+    try:
+        manual = load_manual(report_dir(spec.slug))
+        return analyse(spec, run_state, results, manual, records, context.now()), ledger
+    except ValueError as error:
+        raise _fail(f"{spec.slug}: {error}") from error
+
+
+@app.command()
+def status(
+    slug: SlugArgument,
+    peek: Annotated[
+        bool, typer.Option("--peek", help="Show inference before the stopping rule is met.")
+    ] = False,
+) -> None:
+    """Enrolment against the stopping rule. Names no leader until the rule is met."""
+    context = make_context()
+    spec, run_state = _experiment(slug)
+    settings = context.load_settings()
+    admin = context.make_admin(settings)
+    env, experiment_id = run_state.environment_key, run_state.experiment_id
+    try:
+        experiment = admin.get_experiment(env, experiment_id)
+        results = ExperimentResults.from_api(admin.get_results(env, experiment_id))
+    except FlagsmithAdminError as error:
+        raise _fail(f"status: {error}") from error
+    analysis, ledger = _analyse(context, settings, spec, run_state, results)
+    exposed = ledger_exposures(spec, analysis.records)
+    for line in status_lines(analysis, str(experiment.get("status")), exposed, peek):
+        typer.echo(line)
+    if peek and not analysis.decision.rule_met:
+        try:
+            viewer = context.open_repo(Path.cwd()).user_name()
+        except GitError as error:
+            raise _fail(f"status: {error}") from error
+        detail = {
+            "as_of": analysis.results.as_of.isoformat() if analysis.results.as_of else None,
+            "exposures": analysis.exposures,
+        }
+        ledger.audit("peek", slug, json.dumps(detail, sort_keys=True), viewer)
+
+
+@app.command()
+def report(
+    slug: SlugArgument,
+    no_llm: Annotated[
+        bool, typer.Option("--no-llm", help="Write the prose from the fixed template.")
+    ] = False,
+) -> None:
+    """Refresh and save Flagsmith results, then write reports/<slug>/report.md."""
+    context = make_context()
+    spec, run_state = _experiment(slug)
+    settings = context.load_settings()
+    admin = context.make_admin(settings)
+    folder = report_dir(slug)
+    try:
+        saved = refresh_and_save(
+            admin,
+            run_state.environment_key,
+            run_state.experiment_id,
+            folder,
+            context.now(),
+            context.sleep,
+        )
+    except FlagsmithAdminError as error:
+        raise _fail(f"report: {error}") from error
+    analysis, _ = _analyse(context, settings, spec, run_state, saved.results)
+    drafter = None if no_llm else context.make_drafter(settings)
+    written = write_narrative(analysis, drafter, settings.sa_operator_model)
+    path = folder / "report.md"
+    text = render(analysis, written, saved.path.as_posix(), saved.note)
+    path.write_text(text, encoding="utf-8", newline="\n")
+    typer.echo(f"Results: {saved.path.as_posix()} ({saved.note})")
+    typer.echo(f"Prose: {written.author}")
+    typer.echo(f"Decision: {analysis.decision.decision.value}")
+    typer.echo(f"Report: {path.as_posix()}")

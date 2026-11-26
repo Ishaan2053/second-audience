@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     sa_lab_requests_per_minute: int = Field(default=8, gt=0)
     sa_lab_requests_per_day: int = Field(default=400, gt=0)
     sa_lab_concurrency: int = Field(default=1, ge=1, le=3)
+    sa_operator_model: str = "gemini-3.5-flash-lite"
 
     sa_max_tool_calls: int = Field(default=12, gt=0)
     sa_session_idle_seconds: int = Field(default=600, gt=0)

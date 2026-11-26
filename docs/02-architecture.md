@@ -93,6 +93,7 @@ One `Settings` class, validated at start-up. Missing required values fail fast w
 | `SA_LAB_REQUESTS_PER_MINUTE` | lab | pacing per model, default 8 |
 | `SA_LAB_REQUESTS_PER_DAY` | lab | per-model daily budget before parking, default 400 |
 | `SA_LAB_CONCURRENCY` | lab | sessions at once, 1 to 3, default 1 |
+| `SA_OPERATOR_MODEL` | operator | Gemini model that drafts the prose of `sa report`, default `gemini-3.5-flash-lite` |
 | `SA_MAX_TOOL_CALLS` | server | per-session budget, default 12 |
 | `SA_SESSION_IDLE_SECONDS` | server | default 600 |
 | `SA_FIELD_SESSIONS_PER_IP_PER_HOUR` | server | new field sessions per client IP per sliding hour, default 10 |
@@ -464,6 +465,35 @@ Every mutating action is written to `audit_log`.
 `--dry-run` stops after step 3. `sa doctor` also checks that `FLAGSMITH_ENVIRONMENT_KEY`, when
 set, is a server key of the spec's environment, because a key for the wrong environment sends
 sessions there silently (`docs/checkpoint-a.md`).
+
+**Status and report (fixed in SA-12).** Both read the spec, the state file, Flagsmith's latest
+results and every ledger session started since `started_at`. Modules: `results.py` (typed
+results, `manual.yaml`, saved files), `stats.py` (Wilson interval, chi-square, stopping rule),
+`analysis.py` (all report numbers), `narrative.py` (prose), `report.py` (Markdown and status).
+
+- **Stopping rule:** met when every arm has `min_exposed_per_arm` exposed identities in
+  **Flagsmith's** results (the primary metric's `n`), or the hard end has passed. The ledger's
+  live count is shown beside it but does not decide.
+- **`sa status <slug>`** never refreshes. Before the rule is met it shows no lift, interval,
+  win probability or leader; `--peek` shows them under a warning and writes an `audit_log` row
+  (action `peek`).
+- **`sa report <slug>`** asks Flagsmith to refresh (once per 5 minutes; a refusal is not an
+  error), waits for new results, and saves the raw JSON as
+  `reports/<slug>/results-<UTC timestamp>.json`, reusing the newest saved file when the
+  results have not changed. It writes `reports/<slug>/report.md` in nine sections. Lift,
+  interval and win probability are withheld before the rule is met there too.
+- **Manual values:** where the API returns no inference, `reports/<slug>/manual.yaml`
+  (`metrics: {<metric name>: {lift, ci_low, ci_high, chance_to_win}}`) fills it, marked
+  "from dashboard".
+- **Decision:** `inconclusive` before the rule or without primary inference; `ship` when the
+  win probability reaches the threshold and no guardrail's lift interval lies entirely on its
+  bad side; otherwise `do not ship`.
+- **Reconciliation** compares, per arm, the ledger's exposures and each metric's event sum
+  with Flagsmith's, also counting the ledger only up to Flagsmith's `as_of`. A difference that
+  vanishes at `as_of` is event latency; anything left is reported as unexplained.
+- **Prose:** sections 1 and 9 are drafted by `SA_OPERATOR_MODEL` from a JSON of display
+  strings. Every number in the draft must appear in that JSON; otherwise, or with no key,
+  an API error or `--no-llm`, a fixed template is used. The report names its author.
 
 ### 3.9 Public endpoint
 
