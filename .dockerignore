@@ -1,0 +1,9 @@
+# Allowlist: the image needs only what the build installs. Everything else, including
+# .env, local ledgers and .git, stays out of the build context.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+**/__pycache__
