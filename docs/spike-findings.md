@@ -618,8 +618,13 @@ and `gemini-2.5-pro` start auto-routing to newer models on 2026-12-01, after the
   `rollout_decision: "variant"`.
 - **Never smoke-test a running experiment.** The smoke session's first attempt is a styled
   error, so on a running experiment it would be exposed and counted. `sa ship` runs it only
-  after the experiment is completed, and the live check during SA-14 was limited to a
-  read-only `--dry-run` (refused: 23 and 25 exposed per arm against 75).
+  when the read-back shows the experiment `completed`, waits 5 s for edge propagation before
+  the first probe too, sends it as lab traffic (`SA_LAB_KEY` is required) and excludes the
+  `sa-ship-smoke` label from analysis and evidence. The live check during SA-14 was limited
+  to a read-only `--dry-run` (refused: 23 and 25 exposed per arm against 75).
+- **`complete/` is irreversible, so the record comes first.** A re-run after an ended
+  experiment refuses ("already ended"), so the decision is recorded the moment `complete/`
+  succeeds; read-back and smoke failures become recorded problems, not crashes.
 - **Not yet run end to end.** The full flow against a throwaway Development experiment was
   not run in SA-14, to avoid any Flagsmith write while experiment 680 is live; it belongs
   before the Production run in SA-17.
