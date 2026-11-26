@@ -187,6 +187,24 @@ Prescriptive payload adds:
 The heuristic knows nothing about the user's time window or required features. That is
 realistic, and it is what makes trap scenarios possible.
 
+Details fixed in SA-04 (`booking/suggestions.py`):
+
+- "Nearest" means the 30-minute-step start closest to the requested start; ties go later.
+  Every suggested slot is free and inside opening hours, so applying it cannot hit the
+  same error again.
+- Rooms are compared by capacity, then by ID. "Other room" and "room with enough
+  capacity" both require capacity for the call's attendee count.
+- A `reschedule_booking` cannot change room, so it gets only same-room suggestions, and
+  the booking being moved does not block its own suggestion.
+- No alternative: the suggestion, `corrected_call` and `note` fields are all omitted.
+- `corrected_call` repeats the attempted tool and its arguments (including `session_id`)
+  with the suggested room, date, start and end applied. `corrected_call: true` without
+  `suggest_alternative` is treated as false; `caution_note` appears only with a suggestion.
+- Missing or invalid flag values parse to the control style and log a warning. Unknown
+  keys are ignored. The canonical arm values are `ARM_FLAG_VALUES` in `core/styles.py`.
+- `render_error` reports whether the error was styled, so exposure is recorded only for
+  styled errors.
+
 ### 3.4 Scenarios and correctness (`scenarios.py`, `checker.py`)
 
 Twelve scenarios, each built so the obvious first attempt hits a styled error.
