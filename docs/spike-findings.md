@@ -175,6 +175,9 @@ experiment. Dedicated SQLite ledger, `plan --replicates 2` then `plan --replicat
   belongs to the spec's environment (the Checkpoint A pitfall) without printing either key.
 - **The FastMCP server answers `ping` with "Method not found".** `sa doctor` lists the tools
   instead and requires `begin_task`.
+- **The local `.env` held Production's client-side key**, not a server key (Checkpoint A
+  described it as a server key). Both evaluate, but `sa doctor` requires a server key of the
+  spec's environment, so Checkpoint B replaced it with Production's server key.
 - **Development rehearsal (2026-11-26):** `sa doctor` passed all ten checks; `--dry-run` and a
   wrong confirmation left Flagsmith with no features or metrics; the typed slug created and
   started experiment 665; a second run reused every object and reported it as running.
