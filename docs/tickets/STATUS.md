@@ -5,7 +5,7 @@ Statuses: `pending`, `in progress`, `blocked`, `done`, `cut`. Update at the end 
 | ID | Title | Status | Issue | PR | Notes |
 |---|---|---|---|---|---|
 | SA-01 | Repository scaffold, tooling and CI | done | #1 | #2 | CI green; setup-uv pinned to an exact version (see spike-findings) |
-| SA-02 | Flagsmith setup and verification spike | pending | | | |
+| SA-02 | Flagsmith setup and verification spike | done | #3 | #4 | Gemini RPM/RPD not readable (login page); SA-08 must read them |
 | SA-03 | Booking domain: world, scenarios and correctness checker | pending | | | |
 | SA-04 | Error styles and suggestion heuristic | pending | | | |
 | SA-05 | Session ledger | pending | | | |
