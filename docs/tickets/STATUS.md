@@ -15,7 +15,7 @@ Statuses: `pending`, `in progress`, `blocked`, `done`, `cut`. Update at the end 
 | SA-09 | Operator: spec, doctor, start, and going live (Checkpoint B) | done | #18 | #19, #20 | Experiment 680 live on Production; 20-session reconciliation exact. Primary metric is tool calls per session (pilot ceiling on completion) |
 | SA-10 | Field hardening for the public endpoint | done | #21 | #22 | Limits in `booking/limits.py`; refusals never reach the ledger. Leftmost X-Forwarded-For is spoofable (SA-11 to verify on host) |
 | SA-11 | Public deployment | done | #23 | #24, #25 | Render free, Oregon (Supabase is Tokyo; region fixed at creation). First field session verified with Claude Code. Two-network IP-hash check still open |
-| SA-12 | Operator: status and report | pending | | | |
+| SA-12 | Operator: status and report | done | #26 | #27 | Interim live report: inconclusive (23/25 of 75 per arm); reconciliation exact. Gemini prose number-checked |
 | SA-13 | Operator: propose an experiment from failure logs | pending | | | |
 | SA-14 | Operator: ship the decision with approval | pending | | | |
 | SA-15 | Demo kit: side-by-side transcript replay | pending | | | |

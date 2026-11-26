@@ -173,6 +173,8 @@ class Harness:
             open_repo=Repo.discover,
             open_ledger=lambda settings: Ledger(create_engine(self.database_url)),
             now=lambda: NOW,
+            make_drafter=lambda settings: None,
+            sleep=lambda seconds: None,
         )
         monkeypatch.setattr(cli, "make_context", lambda: context)
 
