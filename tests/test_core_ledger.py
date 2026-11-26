@@ -228,7 +228,7 @@ def test_model_requests_exclude_quota_refusals(ledger: Ledger) -> None:
     b = ledger.claim_next_run("m1")
     assert a is not None
     assert b is not None
-    for status in (RequestStatus.OK, RequestStatus.RATE_LIMITED, RequestStatus.OK):
+    for status in (RequestStatus.OK, RequestStatus.RETRY_LATER, RequestStatus.OK):
         ledger.record_model_request("m1", a.run_id, status)
     ledger.record_model_request("m1", b.run_id, RequestStatus.QUOTA_EXHAUSTED)
     ledger.record_model_request("m2", None, RequestStatus.ERROR)

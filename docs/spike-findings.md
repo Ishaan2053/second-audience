@@ -87,6 +87,67 @@ Surprises found while building, with evidence. The Flagsmith questions are answe
   so `| Where-Object` does not filter its items. Wrap it in parentheses first:
   `(... | ConvertFrom-Json) | Where-Object ...`.
 
+## Lab runner (SA-08)
+
+- **`gemini-2.5-flash-lite` is gone for this project.** On 2026-11-26 it returned `404
+  NOT_FOUND`: "This model models/gemini-2.5-flash-lite is no longer available to new users.
+  Please update your code to use models/gemini-3.5-flash-lite". The lab models are
+  `gemini-3.1-flash-lite` and `gemini-3.5-flash-lite`; both completed live sessions.
+- **Exact RPM and RPD are still unknown** (the AI Studio page needs a sign-in). The runner
+  paces at `SA_LAB_REQUESTS_PER_MINUTE=8` and stops at `SA_LAB_REQUESTS_PER_DAY=400` per
+  model, both settings. No per-minute or per-day 429 was seen in the pilot, so neither
+  limit has been reached yet.
+- **Gemini answers 503 and 504 under load.** `503 UNAVAILABLE` ("This model is currently
+  experiencing high demand") and `504 DEADLINE_EXCEEDED` ("Deadline expired before operation
+  could complete") came back on `gemini-3.1-flash-lite`. Server errors (500, 502, 503, 504)
+  are retried with backoff like a per-minute 429. Four pilot runs failed on them before that
+  change (two 503 before 503 was retried, two 504 before 5xx in general was).
+- **google-genai 3.6.1 does not retry by default.** With no `HttpOptions.retry_options`,
+  `retry_args(None)` stops after one attempt, so the runner's own pacing and backoff decide
+  every request. The SDK's retry, when enabled, retries 429 and 503 alike.
+- **No schema keyword was stripped.** Gemini accepted the booking tools' JSON Schema as-is
+  through `parameters_json_schema`. The tools offered to the model use `type`, `properties`,
+  `required`, `additionalProperties`, `description`, `enum`, `pattern`, `minLength`,
+  `maxLength`, `minimum` and `maximum`. `GEMINI_UNSUPPORTED_KEYWORDS` is empty, so both
+  arms keep the full strict schema.
+- **Thought signatures.** Gemini 3 models return `thought_signature` on function-call parts.
+  The client replays the model's own `Content` unchanged instead of rebuilding it, and sends
+  the results of parallel calls together in one `user` content.
+- **The HTTP logger is `httpx2`.** The MCP client and the Gemini SDK log each request at
+  INFO through `httpx2`, not `httpx`; the runner quiets both.
+- **Ctrl+C from the agent shell on Windows.** Processes started from the Claude Code tool
+  shell inherit "ignore Ctrl+C", and Git Bash signals do not reach native Python. The resume
+  demonstration started the runner in its own console with Ctrl+C re-enabled
+  (`SetConsoleCtrlHandler(None, False)`) and sent `CTRL_C_EVENT` to that console. From a
+  normal PowerShell window, Ctrl+C works directly.
+
+### Pilot (2026-11-26)
+
+Local server on the Flagsmith `Development` environment, which has no `error_style` flag
+yet (SA-09 creates it), so every session got the control (informative) style outside any
+experiment. Dedicated SQLite ledger, `plan --replicates 2` then `plan --replicates 1`
+(36 runs per model), concurrency 1 then 2. Numbers are from the pilot ledger.
+
+| Model | Sessions | Completion | Exposure | Model calls per session | Failed runs |
+|---|---|---|---|---|---|
+| `gemini-3.1-flash-lite` | 32 | 97% (31) | 19% (6) | 5.06 (max 8) | 4 (two 503, two 504) |
+| `gemini-3.5-flash-lite` | 36 | 100% (36) | 28% (10) | 4.86 (max 9) | 0 |
+| Both | 68 | 99% | 24% | 4.96 | 4 |
+
+- **Exposure is far below the ~60% the plan assumed.** 70 of 76 sessions opened with
+  `list_rooms`, and the models checked availability before booking, so they rarely hit a
+  conflict. Exposure by scenario: s07 6/6, s08 5/5, s04 3/6, s01 1/5, s11 1/6, every other
+  scenario 0. Only s07 and s11 of the five trap scenarios exposed anyone, so the guardrail
+  `task_wrong_booking` would get almost no data. **SA-09 must revisit the scenarios before
+  freezing them.**
+- Requests per quota-day: about 5 requests per session, so the 400-request budget allows
+  about 80 sessions per model per day, or about 19 exposed sessions per model at the pilot's
+  exposure rate. The real free-tier RPD may allow more.
+- 23 requests got a 503 or 504 and were retried after backoff; none was a per-minute or
+  per-day 429.
+- Interrupting runs left 10 orphan sessions, closed by the server as `abandoned`; their runs
+  were replayed.
+
 ## Flagsmith spike (SA-02)
 
 Run on 2026-11-26 against the `Development` environment of project `second-audience`
@@ -420,7 +481,8 @@ and `gemini-2.5-pro` start auto-routing to newer models on 2026-12-01, after the
 - **SA-06 and SA-07 key:** `FLAGSMITH_ENVIRONMENT_KEY` is the server key (`ser.`).
 - **SA-08: models and volume.** Use `gemini-3.1-flash-lite` and `gemini-2.5-flash-lite`,
   which both have confirmed free quota on the developer's project, with
-  `gemini-3.5-flash-lite` as a third if quota allows. SA-08 must read the exact RPM and RPD
+  `gemini-3.5-flash-lite` as a third if quota allows. (SA-08: `gemini-2.5-flash-lite` is no
+  longer available; the lab uses `gemini-3.1-flash-lite` and `gemini-3.5-flash-lite`.) SA-08 must read the exact RPM and RPD
   from the AI Studio rate-limit page before sizing the run. Flagsmith shows no inference
   until each arm has at least 50 exposed sessions and at least 5 conversions **per metric**,
   so the guardrail `task_wrong_booking` needs at least 5 wrong bookings per arm; trap

@@ -157,13 +157,13 @@ class RequestStatus(StrEnum):
     """How one lab request to a model ended."""
 
     OK = "ok"
-    RATE_LIMITED = "rate_limited"
+    RETRY_LATER = "retry_later"
     QUOTA_EXHAUSTED = "quota_exhausted"
     ERROR = "error"
 
 
-QUOTA_REJECTIONS = (RequestStatus.RATE_LIMITED, RequestStatus.QUOTA_EXHAUSTED)
-"""Requests the provider refused for quota; assumed not to count against the daily quota."""
+UNCOUNTED_REQUESTS = (RequestStatus.RETRY_LATER, RequestStatus.QUOTA_EXHAUSTED)
+"""Requests the provider refused (quota or overload); assumed not to count against its quota."""
 
 
 class UnknownSessionError(LookupError):
@@ -456,7 +456,7 @@ class Ledger:
                 select(model_requests.c.model, func.count())
                 .where(
                     model_requests.c.at >= since,
-                    model_requests.c.status.not_in(list(QUOTA_REJECTIONS)),
+                    model_requests.c.status.not_in(list(UNCOUNTED_REQUESTS)),
                 )
                 .group_by(model_requests.c.model)
             )
@@ -466,7 +466,7 @@ class Ledger:
         """Average quota-counted model requests per completed run, by model."""
         per_run = (
             select(model_requests.c.run_id, func.count().label("n"))
-            .where(model_requests.c.status.not_in(list(QUOTA_REJECTIONS)))
+            .where(model_requests.c.status.not_in(list(UNCOUNTED_REQUESTS)))
             .group_by(model_requests.c.run_id)
             .subquery()
         )

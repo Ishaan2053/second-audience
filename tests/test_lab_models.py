@@ -2,6 +2,7 @@
 
 from typing import Any
 
+import pytest
 from google.genai import errors, types
 
 from second_audience.lab.models import (
@@ -53,8 +54,9 @@ def test_per_minute_quota_is_rate_limited_with_delay() -> None:
     assert error.retry_after == 14.0
 
 
-def test_overload_is_retried_later() -> None:
-    error = classify_api_error(errors.ServerError(503, {"error": {"status": "UNAVAILABLE"}}))
+@pytest.mark.parametrize("code", [500, 502, 503, 504])
+def test_server_errors_are_retried_later(code: int) -> None:
+    error = classify_api_error(errors.ServerError(code, {"error": {"status": "UNAVAILABLE"}}))
     assert isinstance(error, RetryLaterError)
     assert error.retry_after is None
 

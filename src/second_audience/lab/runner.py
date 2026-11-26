@@ -352,7 +352,7 @@ class LabRunner:
             try:
                 turn = await client.step(messages, tools)
             except RetryLaterError as error:
-                self._ledger.record_model_request(client.name, run_id, RequestStatus.RATE_LIMITED)
+                self._ledger.record_model_request(client.name, run_id, RequestStatus.RETRY_LATER)
                 delay = error.retry_after or min(MAX_BACKOFF_SECONDS, 5.0 * 2**attempt)
                 logger.info("%s: %s; retrying in %.0fs", client.name, error, delay)
                 await self._sleep(delay)

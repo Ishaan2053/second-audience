@@ -24,6 +24,9 @@ SYSTEM_PROMPT = (
 
 GEMINI_REQUEST_TIMEOUT_MS = 120_000
 
+TRANSIENT_SERVER_CODES = frozenset({500, 502, 503, 504})
+"""The status codes the SDK itself treats as retryable, apart from 408 and 429."""
+
 GEMINI_UNSUPPORTED_KEYWORDS: frozenset[str] = frozenset()
 """JSON Schema keywords Gemini rejects in `parameters_json_schema`; stripped before sending.
 
@@ -130,10 +133,10 @@ def strip_keywords(schema: Any, keywords: frozenset[str], path: str = "$") -> tu
 def classify_api_error(error: errors.APIError) -> Exception | None:
     """Map a Gemini 429 to `QuotaExhaustedError` (per-day quota) or `RetryLaterError`.
 
-    A 503 ("model is currently experiencing high demand", seen in the SA-08 pilot) is
-    transient too, so it is retried like a per-minute limit instead of failing the run.
+    Server-side 5xx answers are transient too (the SA-08 pilot saw 503 "high demand" and 504
+    "deadline expired"), so they are retried like a per-minute limit instead of failing the run.
     """
-    if error.code == 503:
+    if error.code in TRANSIENT_SERVER_CODES:
         return RetryLaterError(None)
     if error.code != 429:
         return None
