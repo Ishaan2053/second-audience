@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0  # setup-uv publishes no moving major tag
         with:
           enable-cache: true
       - run: uv lock --check
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0  # setup-uv publishes no moving major tag
         with:
           enable-cache: true
       - run: uv run --locked ruff check .
@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0  # setup-uv publishes no moving major tag
         with:
           enable-cache: true
       - run: uv run --locked ruff format --check .
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0  # setup-uv publishes no moving major tag
         with:
           enable-cache: true
       - run: uv run --locked mypy src
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0  # setup-uv publishes no moving major tag
         with:
           enable-cache: true
       - run: uv run --locked pytest -m "not network"
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0  # setup-uv publishes no moving major tag
         with:
           enable-cache: true
       - run: uv build
@@ -79,7 +79,7 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.4.0  # setup-uv publishes no moving major tag
         with:
           enable-cache: true
       - run: uv export --locked --no-hashes --no-emit-project --format requirements.txt -o requirements-audit.txt
