@@ -1,6 +1,6 @@
 # Ticket Backlog and Execution Order
 
-Nineteen tickets. Each file has the same ten sections and can be handed to the coding agent on its own.
+Twenty-two tickets: seventeen in the main sequence, one stretch, one contingency and three Flagsmith add-ons. Each file has the same ten sections and can be handed to the coding agent on its own.
 
 ## Epics
 
@@ -14,6 +14,7 @@ Nineteen tickets. Each file has the same ten sections and can be handed to the c
 | F Field endpoint | SA-10, SA-11 | 4 |
 | G Submission | SA-15, SA-16, SA-17 | 6 |
 | H Stretch | SA-18 | - |
+| I Flagsmith add-ons | SA-20, SA-21, SA-22 | only if ahead |
 
 ## Backlog
 
@@ -38,6 +39,9 @@ Nineteen tickets. Each file has the same ten sections and can be handed to the c
 | [SA-17](SA-17-release-submission.md) | Release hardening, final results and submission | P0 | release | 2h | SA-16; all tickets intended for the submission |
 | [SA-18](SA-18-middleware-api.md) | Stretch: public middleware API and a second example server | P2 | feature | 2h | SA-07 |
 | [SA-19](SA-19-second-provider.md) | Contingency: second free model provider | P3 | feature | 2h | SA-08 |
+| [SA-20](SA-20-flagsmith-controls.md) | Add-on: operational controls as Flagsmith flags | P2 | feature | 1h | SA-10, SA-11 |
+| [SA-21](SA-21-segment-rollout.md) | Add-on: per-model rollout with a Flagsmith segment | P2 | feature | 1.5h | SA-14 (experiment ended), amendment A1 (identity traits) applied before Checkpoint B |
+| [SA-22](SA-22-flagsmith-integrations.md) | Add-on: Slack, GitHub and audit-log integrations | P3 | infrastructure | 1h | SA-09; SA-11 for the webhook endpoint |
 
 ## Master execution order
 
@@ -64,6 +68,11 @@ Feed the tickets in this order. Lines marked "parallel" can overlap with the lin
 | 17 | SA-17 | Nov 29 | Cut-off by 12:00, submit by 18:00. |
 | any | SA-18 | only if ahead | Stretch. First thing to drop. |
 | any | SA-19 | only on trigger | Contingency for quotas. |
+| any | SA-21 | only if ahead, after SA-14 | Add-on. Best value of the three. Needs amendment A1. |
+| any | SA-20 | only if ahead, after SA-11 | Add-on. |
+| any | SA-22 | only if ahead | Add-on. Mostly configuration. |
+
+**Before Checkpoint B, apply the two amendments in `docs/08-flagsmith-addons.md`.** They are small, and they cannot be added once the experiment has started.
 
 ## How to hand a ticket to the agent
 

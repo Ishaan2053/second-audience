@@ -148,6 +148,37 @@ experiment. Dedicated SQLite ledger, `plan --replicates 2` then `plan --replicat
 - Interrupting runs left 10 orphan sessions, closed by the server as `abandoned`; their runs
   were replayed.
 
+## Operator (SA-09)
+
+- **The npm-installed `flagsmith` CLI always exits 0.** It is a Node wrapper (`index.js`) that
+  spawns the native binary and never passes on its exit code. On a 404 or 400 the wrapper
+  exits 0 while the native `flagsmith.exe` exits 1. Errors are printed to stderr prefixed with
+  `Error:`, status lines (`✓ Created ...`) also go to stderr, and JSON goes to stdout.
+  `FlagsmithAdmin` treats a non-zero exit **or** an `Error:` line on stderr as a failure, which
+  works with either install.
+- **`flagsmith feature get <missing>` is an error**, not an empty result, so lookups use
+  `feature list --json` and filter by name. Each listed feature carries `default_value` and
+  `variants: [{id, key, value, weight}]`.
+- **Experiment responses nest the feature.** `POST .../experiments/` takes `"feature": <id>`,
+  but list and detail responses return `"feature": {"id", "name", "initial_value",
+  "multivariate_options", ...}`. Matching on the raw field missed the running experiment on
+  the second `sa start`, which then offered to create it again (caught live on Development
+  and fixed; `feature_id_of` handles both).
+- **Create, then start.** As in Flagsmith's coding-agent guide: create the flag with the control
+  value, add each keyed variant with `--weight 0`, create the experiment with
+  `experiment_rollout.multivariate_feature_state_values` (control takes the remainder), then
+  `POST .../experiments/<id>/start/`. Status goes `created` to `running`.
+- **Metric aggregations** (`OPTIONS .../experiment-metrics/`): `count`, `sum`, `mean`,
+  `occurrence`; directions `up`, `down`, `informational`. The tool-call metric uses `mean`.
+- **Server keys are listable.** `GET api/v1/environments/<client key>/api-keys/` returns the
+  environment's server keys, so `sa doctor` checks in-process that `FLAGSMITH_ENVIRONMENT_KEY`
+  belongs to the spec's environment (the Checkpoint A pitfall) without printing either key.
+- **The FastMCP server answers `ping` with "Method not found".** `sa doctor` lists the tools
+  instead and requires `begin_task`.
+- **Development rehearsal (2026-11-26):** `sa doctor` passed all ten checks; `--dry-run` and a
+  wrong confirmation left Flagsmith with no features or metrics; the typed slug created and
+  started experiment 665; a second run reused every object and reported it as running.
+
 ## Flagsmith spike (SA-02)
 
 Run on 2026-11-26 against the `Development` environment of project `second-audience`

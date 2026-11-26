@@ -21,7 +21,12 @@ from second_audience.booking.errors import STYLED_CODES, error_payload, render_e
 from second_audience.booking.scenarios import SCENARIOS, Scenario, get_scenario
 from second_audience.booking.suggestions import AttemptedCall
 from second_audience.booking.world import DomainError, World
-from second_audience.core.experiment import TASK_COMPLETED, TASK_WRONG_BOOKING, ExperimentClient
+from second_audience.core.experiment import (
+    TASK_COMPLETED,
+    TASK_FINISHED,
+    TASK_WRONG_BOOKING,
+    ExperimentClient,
+)
 from second_audience.core.ledger import Ledger, Source
 from second_audience.core.styles import CONTROL, ErrorStyle
 
@@ -81,6 +86,7 @@ class Session:
     scenario: Scenario
     world: World
     last_active: float
+    traits: dict[str, str]  # sent to Flagsmith with the exposure
     calls: int = 0
     style: ErrorStyle | None = None  # set at the first styled error, which is the exposure
     in_experiment: bool = False
@@ -135,7 +141,12 @@ class SessionManager:
             identity.agent_label,
             client_ip_hash=None,
         )
-        session = Session(session_id, scenario, scenario.new_world(), self._clock())
+        traits = {
+            "agent_label": identity.agent_label,
+            "source": identity.source,
+            "scenario_kind": scenario.kind,
+        }
+        session = Session(session_id, scenario, scenario.new_world(), self._clock(), traits)
         with self._lock:
             self._sessions[session_id] = session
         return {
@@ -242,7 +253,7 @@ class SessionManager:
         if error.code not in STYLED_CODES:
             return session.style or CONTROL  # unstyled errors render the same in every style
         if session.style is None:
-            style, variant = self._experiment.style_for(session.session_id)
+            style, variant = self._experiment.style_for(session.session_id, session.traits)
             session.style = style
             session.in_experiment = variant is not None
             self._ledger.record_exposure(
@@ -264,9 +275,12 @@ class SessionManager:
             session.session_id, outcome, session.calls, final_state=final_state
         )
         session.outcome = outcome
-        event = _EVENTS.get(final_state)
-        if event and session.in_experiment and outcome is not Outcome.ABANDONED:
-            self._experiment.track(session.session_id, event)
+        if session.in_experiment and outcome is not Outcome.ABANDONED:
+            event = _EVENTS.get(final_state)
+            if event:
+                self._experiment.track(session.session_id, event)
+            # Efficiency metric (docs/08-flagsmith-addons.md, A2): domain calls used.
+            self._experiment.track(session.session_id, TASK_FINISHED, value=session.calls)
             self._experiment.flush()
         logger.info(
             "session %s finished: outcome=%s final_state=%s calls=%d",

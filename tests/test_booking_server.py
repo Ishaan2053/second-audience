@@ -193,7 +193,11 @@ async def test_aligned_and_trap_scenarios_under_each_style(
         assert (summary.variant, summary.in_experiment) == (variant, True)
         assert (summary.outcome, summary.final_state) == (expected, expected)
         event = "task_completed" if expected == "correct" else "task_wrong_booking"
-        assert harness.experiment.tracked == [(session_id, event)]
+        # Two domain calls: the first attempt and the booking that follows it.
+        assert harness.experiment.tracked == [
+            (session_id, event, None),
+            (session_id, "task_finished", 2),
+        ]
         # The variant key never reaches the client.
         assert not any(variant in text for text in harness.responses)
 

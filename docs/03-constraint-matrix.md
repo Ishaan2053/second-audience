@@ -28,7 +28,7 @@ read on Nov 22-25, 2026, plus points the developer confirmed with the organisers
 | Repo, README, demo video | Mandatory | Public repo, README mapped to criteria, video | SA-16, SA-17 |
 | Track 01: clear hypothesis | Mandatory | `HYPOTHESIS.md` committed before the experiment starts | SA-09 |
 | Track 01: versions behind a flag | Mandatory | `error_style` multivariate flag | SA-04, SA-09 |
-| Track 01: metric from real events | Mandatory | `task_completed` sent by the server from scored sessions | SA-06, SA-07 |
+| Track 01: metric from real events | Mandatory | `task_finished` (tool calls, primary), `task_completed` and `task_wrong_booking` sent by the server from scored sessions | SA-06, SA-07, SA-09 |
 | Track 01: explainable results | Mandatory | `sa report` and `docs/RESULTS.md` | SA-12, SA-16 |
 | Track 02: CLI, API or MCP use | Mandatory | `flagsmith` CLI and Admin API | SA-09 |
 | Track 02: human approves changes | Mandatory | Typed confirmation on start and ship; audit log | SA-09, SA-14 |

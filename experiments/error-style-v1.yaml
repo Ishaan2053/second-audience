@@ -1,0 +1,28 @@
+# Experiment 1, pre-registered in HYPOTHESIS.md. Reviewed by a human before `sa start`.
+slug: error-style-v1
+environment: production
+flag: error_style
+hypothesis: >
+  When a booking tool call fails on the current state of the world, an error that adds a
+  suggested alternative and a corrected call (prescriptive) lowers the number of tool calls an
+  agent needs to finish the task, compared with an error that states the fact (informative),
+  without lowering correct bookings or raising wrong ones.
+control:
+  key: control
+  value: {suggest_alternative: false, corrected_call: false, caution_note: false}
+variants:
+  - key: prescriptive
+    value: {suggest_alternative: true, corrected_call: true, caution_note: false}
+metrics:
+  - name: Tool calls per session
+    event: task_finished
+    direction: down
+    aggregation: mean
+    role: primary
+  - {name: Task completed correctly, event: task_completed, direction: up, role: guardrail}
+  - {name: Wrong booking, event: task_wrong_booking, direction: down, role: guardrail}
+allocation: {traffic_percent: 100, split: {control: 50, prescriptive: 50}}
+stopping_rule:
+  min_exposed_per_arm: 75
+  win_probability_threshold: 0.95
+  hard_end: "2026-11-29T12:00:00+05:30"

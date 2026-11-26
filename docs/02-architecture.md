@@ -83,7 +83,8 @@ One `Settings` class, validated at start-up. Missing required values fail fast w
 | `FLAGSMITH_ENVIRONMENT_KEY` | server | SDK key for the Flagsmith environment |
 | `FLAGSMITH_API_URL` | server | optional override |
 | `FLAGSMITH_REQUEST_TIMEOUT_SECONDS` | server | per-request timeout, default 2; one retry, then the control style |
-| `SA_FLAG_NAME` | server | default `error_style` |
+| `SA_FLAG_NAME` | server, operator | default `error_style`; `sa doctor` checks the spec uses it |
+| `SA_FLAGSMITH_PROJECT` | operator | Flagsmith project the CLI manages; default `second-audience` |
 | `SA_DATABASE_URL` | server, operator, lab | ledger; default `sqlite:///./sa.db`; Postgres as `postgresql+psycopg://...` |
 | `GEMINI_API_KEY` | lab, operator | model access |
 | `SA_LAB_MODELS` | lab | comma-separated model IDs |
@@ -257,7 +258,8 @@ Finalisation triggers: `finish_task`, budget exhaustion, or idle timeout.
   `finish_task` normally. Calls refused for the budget are not recorded.
 - **Finalisation** is one idempotent function. It stores the outcome and `final_state` (the
   checker's result) once, and sends `task_completed` or `task_wrong_booking` from
-  `final_state` for sessions exposed inside the experiment, except abandoned ones.
+  `final_state`, plus `task_finished` with the call count, for sessions exposed inside the
+  experiment, except abandoned ones.
   `finish_task` returns `{session_id, finished, outcome}`; repeat calls return the same.
   It is recorded in the transcript (with the agent's summary) after the last domain call.
 - **Idle expiry.** A background task runs every `min(60, SA_SESSION_IDLE_SECONDS)` seconds. It
@@ -278,8 +280,10 @@ Finalisation triggers: `finish_task`, budget exhaustion, or idle timeout.
 
 ```python
 class ExperimentClient(Protocol):
-    def style_for(self, session_id: str) -> tuple[ErrorStyle, str | None]: ...
-    def track(self, session_id: str, event: str) -> None: ...
+    def style_for(
+        self, session_id: str, traits: Mapping[str, str] | None = None
+    ) -> tuple[ErrorStyle, str | None]: ...
+    def track(self, session_id: str, event: str, value: float | None = None) -> None: ...
     def flush(self) -> None: ...
 ```
 
@@ -287,6 +291,9 @@ class ExperimentClient(Protocol):
   `get_experiment_flag(flag, identifier=session_id)`, resolves the flag and records the
   exposure. The result is cached per session in a bounded LRU (4,096 sessions), so repeated
   calls neither re-evaluate nor re-expose. Returns the style and the variant key.
+- **Identity traits (SA-09, amendment A1).** The same call carries `agent_label`, `source`
+  (`lab` or `field`) and `scenario_kind` as traits, stored on the Flagsmith identity so a
+  segment can target them later (SA-21). They ride on the evaluation request; no extra call.
 - **Lazy exposure. Why:** a session that never hits a styled error is unaffected by the
   variant; counting it would dilute the result. Whether a session reaches its first styled
   error does not depend on the arm, so this keeps the comparison valid.
@@ -301,8 +308,10 @@ class ExperimentClient(Protocol):
   Requests time out after `FLAGSMITH_REQUEST_TIMEOUT_SECONDS` (default 2) with one retry,
   so an outage costs a tool call about two timeouts at most.
 - Events: `task_completed` when the outcome is `correct`; `task_wrong_booking` when it is
-  `incorrect`. The caller sends them only for sessions that were exposed (Flagsmith also
-  ignores events from identities with no exposure). `track` never raises on delivery
+  `incorrect`; and `task_finished` for every scored session, with the session's domain
+  tool-call count as its numeric value (SA-09, amendment A2), for the "tool calls per session"
+  metric (`mean` aggregation, the primary metric). The caller sends them only for sessions
+  that were exposed (Flagsmith also ignores events from identities with no exposure). `track` never raises on delivery
   failures; an unknown event name raises `ValueError`. `flush` blocks until buffered events
   are delivered; the server calls it after each `finish_task` and on shutdown, the lab
   runner at the end of a batch.
@@ -419,14 +428,38 @@ It then calls `finish_task` if the model did not.
 
 | Command | What it does | Approval |
 |---|---|---|
-| `sa doctor` | Checks settings, CLI login, warehouse connection, database, model key. | none |
+| `sa doctor` | Checks settings, spec, CLI login, environment, warehouse connection, server SDK key, database, model key, server. | none |
 | `sa propose` | Reads failing sessions from the ledger, drafts an experiment spec and rationale. | human edits and commits the file |
 | `sa start <spec>` | Shows the plan, then creates the flag, variants, metrics and experiment, and starts it. | typed confirmation |
 | `sa status <slug>` | Enrolment, stopping-rule progress. Refuses to name a winner early. | none |
 | `sa report <slug>` | Refreshes and saves results, builds the Markdown report. | none |
 | `sa ship <slug>` | Ends the experiment and sets the winning value on the flag, or records a no-ship decision. | typed confirmation |
 
-Every mutating action is written to `audit_log`. The spec file format is defined in SA-09.
+Every mutating action is written to `audit_log`.
+
+**Spec and start (fixed in SA-09).** A spec (`experiments/<slug>.yaml`, model in
+`operator/spec.py`) names the environment, flag, hypothesis, arms (each value must parse as
+`ErrorStyle`), metrics, allocation and stopping rule. Each metric has a `role`: exactly one
+`primary`, any number of `guardrail` or `secondary`. A guardrail maps to `not_increase` or
+`not_decrease`, the others to `increase` or `decrease`. `sa start`:
+
+1. runs the doctor checks; any failure refuses;
+2. refuses if the spec or `HYPOTHESIS.md` has uncommitted changes, if `HYPOTHESIS.md` does
+   not mention the slug, or if the hard end has passed;
+3. reads Flagsmith and prints the plan (create or reuse each object, then start), refusing if
+   an existing object differs from the spec, another experiment is active on the flag, or the
+   spec's experiment has already ended;
+4. asks the human to type the slug (skipped when the experiment is already running, since
+   nothing changes);
+5. creates the flag (default value = control arm), each variant with weight 0 (only the
+   experiment assigns it), the metrics and the experiment, starts it and checks it is
+   `running`;
+6. writes `experiments/.state/<slug>.json` (IDs, `started_at`, commit, approver) once, and an
+   `audit_log` row with `approved_by` from `git config user.name`.
+
+`--dry-run` stops after step 3. `sa doctor` also checks that `FLAGSMITH_ENVIRONMENT_KEY`, when
+set, is a server key of the spec's environment, because a key for the wrong environment sends
+sessions there silently (`docs/checkpoint-a.md`).
 
 ### 3.9 Public endpoint
 
@@ -444,7 +477,7 @@ concurrent sessions, and no personal data in the ledger (IP stored only as a sal
 | Environments | `development` (smoke and pilot), `production` (the reported experiment) |
 | Warehouse | Flagsmith managed warehouse, enabled on both environments |
 | Flag | `error_style`, multivariate; control value = informative JSON; variant key `prescriptive` |
-| Metrics | `task_completed` (occurrence, up; expected direction `increase`, primary); `task_wrong_booking` (occurrence, down; expected direction `not_increase`, guardrail) |
+| Metrics | `task_finished` (mean of the value, down; expected direction `decrease`, primary); `task_completed` (occurrence, up; expected direction `not_decrease`, guardrail); `task_wrong_booking` (occurrence, down; expected direction `not_increase`, guardrail). Efficiency became primary in SA-09 because completion was at its ceiling in the pilot (`HYPOTHESIS.md`) |
 | Split | 100% of exposed sessions, 50/50 |
 
 ## 5. Session sequence
@@ -468,7 +501,7 @@ sequenceDiagram
     A->>S: further calls
     A->>S: finish_task
     S->>S: checker scores final state
-    S->>E: track(task_completed) if correct
+    S->>E: track(task_completed) if correct, track(task_finished, calls)
     E->>F: event
     S->>L: outcome
 ```
