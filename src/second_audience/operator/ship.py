@@ -3,8 +3,10 @@
 Ending an experiment is one documented Admin API call, verified live on Development in the
 SA-02 spike (question 8): `POST .../experiments/<id>/complete/` with `rollout_decision`
 `variant` (and the winning option's ID) or `control`. Nothing here runs until the human has
-seen the plan and typed the confirmation. Afterwards the experiment and the flag are read
-back, and one scripted session against the server confirms the style it now serves.
+seen the plan and typed the confirmation. The decision is recorded as soon as Flagsmith
+accepts the change. Then the experiment and the flag are read back, one scripted session
+against the server confirms the style it now serves, and the record is completed with what
+was verified. A failure after the change is a recorded problem, never a missing record.
 """
 
 import asyncio
@@ -22,7 +24,13 @@ from second_audience.booking.scenarios import get_scenario
 from second_audience.booking.sessions import AGENT_LABEL_HEADER, LAB_KEY_HEADER
 from second_audience.config import Settings
 from second_audience.core.styles import ErrorStyle
-from second_audience.operator.analysis import Analysis, Decision
+from second_audience.operator.analysis import (
+    SMOKE_AGENT_LABEL,
+    Analysis,
+    Decision,
+    event_value,
+    scored,
+)
 from second_audience.operator.flagsmith_admin import FlagsmithAdmin
 from second_audience.operator.start import RUNNING
 
@@ -31,7 +39,6 @@ DECISION_FILE = "decision.md"
 
 SMOKE_SCENARIO = "s01"
 """Aligned: its first attempt hits a conflict that has a suggestion, so every style shows."""
-SMOKE_AGENT_LABEL = "sa-ship-smoke"
 SMOKE_ATTEMPTS = 6
 SMOKE_WAIT_SECONDS = 5.0
 """A flag change takes 3 to 6 seconds to reach every edge node (spike findings, SA-06)."""
@@ -120,23 +127,51 @@ def served_value(feature_state: dict[str, Any], option_values: dict[int, str]) -
 
 @dataclass
 class Outcome:
-    """What `sa ship` read back after the change, and anything that did not match."""
+    """What Flagsmith answered, what was read back after the change, and what did not match."""
 
     experiment: dict[str, Any]
-    served: str | None
+    served: str | None = None
     observed: ErrorStyle | None = None
     problems: list[str] = field(default_factory=list)
+    read_back: bool = False
+    """The experiment and the flag were read back after the change."""
+    checked: bool = False
+    """Verification has finished (or was cut short, which `problems` says)."""
+
+    @property
+    def smoke_safe(self) -> bool:
+        """Whether the read-back shows the experiment ended, so a smoke session cannot enrol."""
+        return self.read_back and self.experiment.get("status") == COMPLETED
 
 
-def apply_ship(plan: ShipPlan, admin: FlagsmithAdmin) -> Outcome:
-    """End the experiment, then read the experiment and the flag back and compare."""
+def complete(plan: ShipPlan, admin: FlagsmithAdmin) -> Outcome:
+    """End the experiment (irreversible); the outcome holds Flagsmith's answer, unverified."""
+    state = plan.analysis.state
+    try:
+        answer = admin.complete_experiment(
+            state.environment_key, state.experiment_id, plan.rollout_decision, plan.rollout_variant
+        )
+    except json.JSONDecodeError as error:  # the CLI exited cleanly, so the call was made
+        return Outcome({}, problems=[f"complete/ answered with unreadable JSON: {error}"])
+    return Outcome(dict(answer or {}))
+
+
+def read_back(plan: ShipPlan, admin: FlagsmithAdmin, outcome: Outcome) -> None:
+    """Read the experiment and the flag back and note anything that does not match the plan.
+
+    The change is already made, so a failed read becomes a problem, not an exception.
+    """
     spec, state = plan.analysis.spec, plan.analysis.state
     env = state.environment_key
-    admin.complete_experiment(env, state.experiment_id, plan.rollout_decision, plan.rollout_variant)
-    experiment = admin.get_experiment(env, state.experiment_id)
-    feature_state = admin.feature_state(env, state.feature_id)
+    try:
+        experiment = admin.get_experiment(env, state.experiment_id)
+        feature_state = admin.feature_state(env, state.feature_id)
+    except Exception as error:  # any CLI, API or parsing failure after the irreversible call
+        outcome.problems.append(f"read-back failed: {type(error).__name__}: {error}")
+        return
     options = {state.variant_ids[arm.key]: arm.flag_value for arm in spec.variants}
-    outcome = Outcome(experiment, served_value(feature_state, options))
+    outcome.experiment, outcome.read_back = experiment, True
+    outcome.served = served_value(feature_state, options)
     if experiment.get("status") != COMPLETED:
         outcome.problems.append(f"experiment status is {experiment.get('status')!r}")
     if experiment.get("rollout_decision") != plan.rollout_decision:
@@ -150,7 +185,6 @@ def apply_ship(plan: ShipPlan, admin: FlagsmithAdmin) -> Outcome:
         outcome.problems.append(
             f"flag {spec.flag} serves {outcome.served!r}, expected {plan.serve_value!r}"
         )
-    return outcome
 
 
 # --- the smoke session ----------------------------------------------------------------------
@@ -186,12 +220,13 @@ async def observe_style(client: Client[Any]) -> ErrorStyle:
 
 
 def smoke_session(settings: Settings) -> ErrorStyle:
-    """Run one smoke session against `SA_SERVER_URL`, as lab traffic when `SA_LAB_KEY` is set."""
-    if settings.sa_server_url is None:
-        raise RuntimeError("SA_SERVER_URL is not set")
-    headers = {AGENT_LABEL_HEADER: SMOKE_AGENT_LABEL}
-    if settings.sa_lab_key is not None:
-        headers[LAB_KEY_HEADER] = settings.sa_lab_key.get_secret_value()
+    """Run one smoke session against `SA_SERVER_URL`, as lab traffic (`SA_LAB_KEY`)."""
+    if settings.sa_server_url is None or settings.sa_lab_key is None:
+        raise RuntimeError("SA_SERVER_URL and SA_LAB_KEY must both be set")
+    headers = {
+        AGENT_LABEL_HEADER: SMOKE_AGENT_LABEL,
+        LAB_KEY_HEADER: settings.sa_lab_key.get_secret_value(),
+    }
     transport = StreamableHttpTransport(settings.sa_server_url, headers=headers)
 
     async def run() -> ErrorStyle:
@@ -204,7 +239,12 @@ def smoke_session(settings: Settings) -> ErrorStyle:
 def smoke_until(
     probe: Callable[[], ErrorStyle], expected: ErrorStyle, sleep: Callable[[float], None]
 ) -> ErrorStyle:
-    """Probe until the served style is `expected`, allowing for edge propagation."""
+    """Probe until the served style is `expected`, waiting for edge propagation first.
+
+    The first wait matters: until the change reaches the edge, a session can still be
+    enrolled in the experiment that just ended.
+    """
+    sleep(SMOKE_WAIT_SECONDS)
     observed = probe()
     for _ in range(SMOKE_ATTEMPTS - 1):
         if observed == expected:
@@ -225,11 +265,29 @@ def _inference(analysis: Analysis) -> dict[str, dict[str, float] | None]:
     }
 
 
+def guardrail_ledger_counts(analysis: Analysis) -> dict[str, dict[str, dict[str, int]]]:
+    """Per-arm ledger counts for each guardrail Flagsmith gave no inference on.
+
+    HYPOTHESIS.md section 10 reports these instead of a lift interval.
+    """
+    counts: dict[str, dict[str, dict[str, int]]] = {}
+    for row in analysis.rows:
+        if row.metric.role != "guardrail" or row.inference is not None:
+            continue
+        counts[row.metric.name] = {}
+        for arm in analysis.spec.arms:
+            done = [r for r in analysis.records if scored(r) and r.variant == arm.key]
+            total = sum(event_value(r, row.metric.event) for r in done)
+            counts[row.metric.name][arm.key] = {"scored": len(done), "count": int(total)}
+    return counts
+
+
 def audit_detail(plan: ShipPlan, outcome: Outcome) -> dict[str, Any]:
     """The `audit_log` detail: the decision, the numbers it rests on, and what was verified."""
     analysis = plan.analysis
     as_of = analysis.results.as_of
-    return {
+    ledger_counts = guardrail_ledger_counts(analysis)
+    detail: dict[str, Any] = {
         "decision": plan.decision.value,
         "reasons": analysis.decision.reasons,
         "exposures": analysis.exposures,
@@ -243,8 +301,13 @@ def audit_detail(plan: ShipPlan, outcome: Outcome) -> dict[str, Any]:
         "served_arm": plan.serve_arm,
         "served_value": outcome.served,
         "smoke_style": outcome.observed.model_dump() if outcome.observed else None,
+        "verification": "done" if outcome.checked else "pending",
         "problems": outcome.problems,
     }
+    if ledger_counts:
+        detail["guardrail_ledger_counts"] = ledger_counts
+        detail["trap_wrong_bookings"] = [r.session_id for r in analysis.trap_wrong]
+    return detail
 
 
 def decision_record(plan: ShipPlan, outcome: Outcome, approved_by: str, now: datetime) -> str:
@@ -271,22 +334,39 @@ def decision_record(plan: ShipPlan, outcome: Outcome, approved_by: str, now: dat
         f"- Flagsmith: experiment {state.experiment_id} is {outcome.experiment.get('status')} "
         f"(ended {outcome.experiment.get('ended_at')}), rollout_decision "
         f"`{plan.rollout_decision}`{variant}.",
-        f"- Flag `{spec.flag}` in {spec.environment} now serves `{outcome.served}` "
-        f"(expected {plan.serve_arm}: `{plan.serve_value}`), read back from the environment.",
-        f"- Smoke session on scenario {SMOKE_SCENARIO}: error payload showed {observed}.",
     ]
+    if not outcome.checked:
+        lines.append(
+            "- **Verification pending:** Flagsmith accepted the change; the read-back and the "
+            "smoke session had not finished when this was written. If this line remains, "
+            "`sa ship` stopped before verifying: check the experiment and the flag by hand."
+        )
+    else:
+        served = f"`{outcome.served}`" if outcome.read_back else "not read back"
+        lines += [
+            f"- Flag `{spec.flag}` in {spec.environment} now serves {served} "
+            f"(expected {plan.serve_arm}: `{plan.serve_value}`), read back from the environment.",
+            f"- Smoke session on scenario {SMOKE_SCENARIO}: error payload showed {observed}.",
+        ]
     if outcome.problems:
         lines += ["- **Verification failed:**", *(f"  - {p}" for p in outcome.problems)]
-    else:
+    elif outcome.checked:
         lines.append("- Verified: experiment ended, flag value and served style match.")
     return "\n".join(lines) + "\n"
 
 
-def append_record(folder: Path, record: str) -> Path:
-    """Save the record as `decision.md` and append it to `report.md`; returns the report path."""
+def append_record(folder: Path, record: str, replacing: str | None = None) -> Path:
+    """Save the record as `decision.md` and add it to `report.md`; returns the report path.
+
+    With `replacing`, an earlier record already in the report is replaced in place.
+    """
     folder.mkdir(parents=True, exist_ok=True)
     (folder / DECISION_FILE).write_text(record, encoding="utf-8", newline="\n")
     report = folder / "report.md"
     existing = report.read_text(encoding="utf-8") if report.exists() else ""
-    report.write_text(existing.rstrip("\n") + "\n\n" + record, encoding="utf-8", newline="\n")
+    if replacing is not None and replacing in existing:
+        text = existing.replace(replacing, record)
+    else:
+        text = existing.rstrip("\n") + "\n\n" + record
+    report.write_text(text, encoding="utf-8", newline="\n")
     return report

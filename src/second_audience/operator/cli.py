@@ -41,10 +41,12 @@ from second_audience.operator.ship import (
     ShipPlan,
     ShipRefusedError,
     append_record,
-    apply_ship,
     audit_detail,
+    complete,
     decision_record,
+    guardrail_ledger_counts,
     plan_ship,
+    read_back,
     smoke_session,
     smoke_until,
 )
@@ -437,6 +439,16 @@ def _print_ship_plan(plan: ShipPlan) -> None:
             else "no inference"
         )
         typer.echo(f"  {row.metric.role} {row.metric.name}: {stats}; {inference}")
+    ledger_counts = guardrail_ledger_counts(analysis)
+    for name, arms in ledger_counts.items():
+        counts = ", ".join(f"{arm} {c['count']} of {c['scored']}" for arm, c in arms.items())
+        typer.echo(f"  ledger counts for {name} (scored sessions): {counts}")
+    if ledger_counts:
+        trap = ", ".join(r.session_id for r in analysis.trap_wrong) or "none"
+        typer.echo(
+            f"  {analysis.spec.variants[0].key} wrong bookings on trap scenarios (ledger): "
+            f"{len(analysis.trap_wrong)} ({trap})"
+        )
     typer.echo("Rule applied:")
     for reason in analysis.decision.reasons:
         typer.echo(f"  - {reason}")
@@ -476,6 +488,10 @@ def ship(
     _print_ship_plan(plan)
     if settings.sa_server_url is None:
         raise _fail("ship: SA_SERVER_URL is not set, so the served style cannot be checked")
+    if settings.sa_lab_key is None:
+        raise _fail(
+            "ship: SA_LAB_KEY is not set, so the smoke session would count as field traffic"
+        )
     if dry_run:
         typer.echo("\nDry run: nothing was changed.")
         return
@@ -488,16 +504,26 @@ def ship(
     if typed.strip() != phrase:
         raise _fail("ship: confirmation did not match; nothing was changed")
     try:
-        outcome = apply_ship(plan, admin)
+        outcome = complete(plan, admin)
     except FlagsmithAdminError as error:
-        raise _fail(f"ship: {error}") from error
-    _smoke(context, settings, plan, outcome)
-    ledger.audit("ship", slug, json.dumps(audit_detail(plan, outcome), sort_keys=True), approver)
-    report = append_record(folder, decision_record(plan, outcome, approver, context.now()))
+        raise _fail(
+            f"ship: the complete/ call failed: {error}\nNothing was recorded. Check experiment "
+            f"{run_state.experiment_id} in Flagsmith before running `sa ship` again."
+        ) from error
+    # The experiment has ended: record that now, so no later failure can leave it unrecorded.
+    now = context.now()
+    pending = _record(ledger, folder, plan, outcome, approver, now, None)
+    try:
+        read_back(plan, admin, outcome)
+        _smoke(context, settings, plan, outcome)
+    except KeyboardInterrupt:
+        outcome.problems.append("interrupted before verification finished")
+    outcome.checked = True
+    _record(ledger, folder, plan, outcome, approver, now, pending)
     typer.echo(
         f"\nExperiment {slug} is {outcome.experiment.get('status')}; flag serves "
-        f"{plan.serve_arm}. Approved by {approver}. Recorded in the audit log and "
-        f"{report.as_posix()}."
+        f"{outcome.served!r} (expected {plan.serve_arm}). Approved by {approver}. Recorded in "
+        f"the audit log and {(folder / DECISION_FILE).as_posix()}."
     )
     if outcome.problems:
         raise _fail(
@@ -505,8 +531,42 @@ def ship(
         )
 
 
+def _record(
+    ledger: Ledger,
+    folder: Path,
+    plan: ShipPlan,
+    outcome: Outcome,
+    approver: str,
+    now: datetime,
+    replacing: str | None,
+) -> str:
+    """Write the audit row and the decision record for the outcome so far; returns the record.
+
+    The first call (`ship`) follows the irreversible change; the second (`ship_verify`) adds
+    what was verified and replaces the first record in the report.
+    """
+    action = "ship_verify" if outcome.checked else "ship"
+    detail = json.dumps(audit_detail(plan, outcome), sort_keys=True)
+    try:
+        ledger.audit(action, plan.analysis.spec.slug, detail, approver)
+    except Exception as error:  # the change is made; the file record below must still be written
+        outcome.problems.append(f"audit log write ({action}) failed: {type(error).__name__}")
+    record = decision_record(plan, outcome, approver, now)
+    append_record(folder, record, replacing)
+    return record
+
+
 def _smoke(context: Context, settings: Settings, plan: ShipPlan, outcome: Outcome) -> None:
-    """Run smoke sessions until the server serves the expected style; note any mismatch."""
+    """Run smoke sessions until the server serves the expected style; note any mismatch.
+
+    Skipped unless the read-back shows the experiment ended, so no smoke session can be
+    enrolled in it.
+    """
+    if not outcome.smoke_safe:
+        outcome.problems.append(
+            "smoke session skipped: the experiment was not read back as completed"
+        )
+        return
     expected = ErrorStyle.from_flag_value(plan.serve_value)
     try:
         outcome.observed = smoke_until(lambda: context.smoke(settings), expected, context.sleep)

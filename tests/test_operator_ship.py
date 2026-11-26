@@ -20,16 +20,19 @@ from second_audience.core.ledger import Ledger, audit_log
 from second_audience.core.styles import ARM_FLAG_VALUES, CONTROL, PRESCRIPTIVE, ErrorStyle
 from second_audience.operator import cli
 from second_audience.operator.analysis import Analysis, Decision, RunState, analyse
-from second_audience.operator.flagsmith_admin import FlagsmithAdmin
+from second_audience.operator.flagsmith_admin import FlagsmithAdmin, FlagsmithAdminError
 from second_audience.operator.results import ExperimentResults
 from second_audience.operator.ship import (
     SMOKE_ATTEMPTS,
+    SMOKE_WAIT_SECONDS,
     Outcome,
     ShipRefusedError,
-    apply_ship,
+    audit_detail,
+    complete,
     decision_record,
     observe_style,
     plan_ship,
+    read_back,
     served_value,
     smoke_until,
 )
@@ -182,8 +185,11 @@ class FakeAdmin(FlagsmithAdmin):
         self.state = _feature_state(ARM_FLAG_VALUES["control"], 0.0)
         self.changes: list[tuple[str, int | None]] = []
         self.ignore_complete = False
+        self.read_error: Exception | None = None
 
     def get_experiment(self, env: str, experiment_id: int) -> dict[str, Any]:
+        if self.changes and self.read_error is not None:
+            raise self.read_error
         return dict(self.experiment)
 
     def get_results(self, env: str, experiment_id: int) -> dict[str, Any]:
@@ -207,21 +213,45 @@ class FakeAdmin(FlagsmithAdmin):
         return self.state
 
 
-def test_apply_ship_ends_and_verifies(tmp_path: Path) -> None:
+def test_complete_then_read_back_verifies(tmp_path: Path) -> None:
     plan = plan_ship(analysis_for(results_json(inference=WIN), tmp_path), RUNNING, Path("r"))
     admin = FakeAdmin(results_json(inference=WIN))
-    outcome = apply_ship(plan, admin)
+    outcome = complete(plan, admin)
     assert admin.changes == [("variant", VARIANT_ID)]
+    assert not outcome.read_back
+    read_back(plan, admin, outcome)
+    assert outcome.read_back
+    assert outcome.smoke_safe
     assert outcome.served == ARM_FLAG_VALUES["prescriptive"]
     assert outcome.problems == []
 
 
-def test_apply_ship_reports_what_does_not_match(tmp_path: Path) -> None:
+def test_read_back_reports_what_does_not_match(tmp_path: Path) -> None:
     plan = plan_ship(analysis_for(results_json(inference=WIN), tmp_path), RUNNING, Path("r"))
     admin = FakeAdmin(results_json(inference=WIN))
     admin.ignore_complete = True
-    outcome = apply_ship(plan, admin)
+    outcome = complete(plan, admin)
+    read_back(plan, admin, outcome)
     assert len(outcome.problems) == 3  # status, rollout_decision, served value
+    assert not outcome.smoke_safe
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        FlagsmithAdminError(["api"], "expected one environment default for feature 1, got 2"),
+        json.JSONDecodeError("Expecting value", "", 0),
+    ],
+)
+def test_read_back_failure_is_a_problem_not_an_exception(tmp_path: Path, error: Exception) -> None:
+    plan = plan_ship(analysis_for(results_json(inference=WIN), tmp_path), RUNNING, Path("r"))
+    admin = FakeAdmin(results_json(inference=WIN))
+    admin.read_error = error
+    outcome = complete(plan, admin)
+    read_back(plan, admin, outcome)
+    assert not outcome.read_back
+    assert not outcome.smoke_safe
+    assert outcome.problems[0].startswith(f"read-back failed: {type(error).__name__}")
 
 
 # --- the smoke session ------------------------------------------------------------------------
@@ -246,23 +276,59 @@ async def test_observe_style_reads_the_served_style(
     engine.dispose()
 
 
-def test_smoke_until_waits_for_propagation() -> None:
+def test_smoke_until_waits_for_propagation_before_every_probe() -> None:
     seen = iter([CONTROL, CONTROL, PRESCRIPTIVE])
+    events: list[str] = []
+
+    def probe() -> ErrorStyle:
+        events.append("probe")
+        return next(seen)
+
+    def sleep(seconds: float) -> None:
+        assert seconds == SMOKE_WAIT_SECONDS
+        events.append("sleep")
+
+    assert smoke_until(probe, PRESCRIPTIVE, sleep) == PRESCRIPTIVE
+    assert events == ["sleep", "probe"] * 3  # the first probe also waits
     sleeps: list[float] = []
-    assert smoke_until(lambda: next(seen), PRESCRIPTIVE, sleeps.append) == PRESCRIPTIVE
-    assert len(sleeps) == 2
-    sleeps.clear()
     assert smoke_until(lambda: CONTROL, PRESCRIPTIVE, sleeps.append) == CONTROL
-    assert len(sleeps) == SMOKE_ATTEMPTS - 1
+    assert len(sleeps) == SMOKE_ATTEMPTS
 
 
 def test_decision_record_names_the_approver_and_failures(tmp_path: Path) -> None:
     plan = plan_ship(analysis_for(results_json(inference=WIN), tmp_path), RUNNING, Path("r.json"))
     outcome = Outcome({"status": "completed", "ended_at": "t"}, "v", None, ["smoke failed"])
+    outcome.read_back = outcome.checked = True
     text = decision_record(plan, outcome, "dev", NOW)
     assert text.startswith("## Decision (2026-11-27 06:00 UTC)")
     assert "approved by dev (typed `ship error-style-v1`)" in text
     assert "**Verification failed:**" in text
+    assert "pending" not in text
+
+
+def test_decision_record_before_verification_says_it_is_pending(tmp_path: Path) -> None:
+    plan = plan_ship(analysis_for(results_json(inference=WIN), tmp_path), RUNNING, Path("r.json"))
+    text = decision_record(plan, Outcome({"status": "completed"}), "dev", NOW)
+    assert "**Verification pending:**" in text
+    assert "Verified:" not in text
+    assert "now serves" not in text
+
+
+def test_audit_detail_reports_ledger_counts_when_a_guardrail_has_no_inference(
+    tmp_path: Path,
+) -> None:
+    plan = plan_ship(analysis_for(results_json(inference=WIN), tmp_path), RUNNING, Path("r"))
+    detail = audit_detail(plan, Outcome({}))
+    assert detail["verification"] == "pending"
+    assert set(detail["guardrail_ledger_counts"]) == {"Task completed correctly", "Wrong booking"}
+    assert detail["guardrail_ledger_counts"]["Wrong booking"]["control"] == {
+        "scored": 0,
+        "count": 0,
+    }
+    assert detail["trap_wrong_bookings"] == []
+    covered = {**WIN, COMPLETED: (0.0, -0.1, 0.1, 0.5), WRONG: (0.0, -0.1, 0.1, 0.5)}
+    plan = plan_ship(analysis_for(results_json(inference=covered), tmp_path), RUNNING, Path("r"))
+    assert "guardrail_ledger_counts" not in audit_detail(plan, Outcome({}))
 
 
 # --- the CLI ----------------------------------------------------------------------------------
@@ -303,13 +369,15 @@ class Workspace:
         self.admin = FakeAdmin(raw)
         self.smokes = 0
         self.served = served
-        settings = Settings(
+        self.smoke_error: BaseException | None = None
+        self.settings = Settings(
             _env_file=None,  # type: ignore[call-arg]
             sa_database_url=SecretStr(self.database_url),
             sa_server_url="http://server/mcp",
+            sa_lab_key=SecretStr("lab"),
         )
         context = cli.Context(
-            load_settings=lambda: settings,
+            load_settings=lambda: self.settings,
             make_admin=lambda s: self.admin,
             checks=lambda *args: pytest.fail("sa ship runs no doctor checks"),
             open_repo=lambda path: FakeRepo(),  # type: ignore[arg-type,return-value]
@@ -324,6 +392,8 @@ class Workspace:
 
     def _smoke(self, settings: Settings) -> ErrorStyle:
         self.smokes += 1
+        if self.smoke_error is not None:
+            raise self.smoke_error
         return self.served
 
     def audit_rows(self) -> list[Any]:
@@ -394,9 +464,12 @@ def test_ship_ends_verifies_and_records(tmp_path: Path, monkeypatch: pytest.Monk
     assert result.exit_code == 0, result.output
     assert workspace.admin.changes == [("variant", VARIANT_ID)]
     assert workspace.smokes == 1
-    (row,) = workspace.audit_rows()
-    assert (row.action, row.experiment_slug, row.approved_by) == ("ship", SLUG, "dev")
+    first, row = workspace.audit_rows()
+    assert (first.action, first.experiment_slug, first.approved_by) == ("ship", SLUG, "dev")
+    assert json.loads(first.detail)["verification"] == "pending"
+    assert (row.action, row.experiment_slug, row.approved_by) == ("ship_verify", SLUG, "dev")
     detail = json.loads(row.detail)
+    assert detail["verification"] == "done"
     assert detail["decision"] == "ship_variant"
     assert detail["inference"]["Tool calls per session"]["chance_to_win"] == 0.99
     assert detail["served_value"] == ARM_FLAG_VALUES["prescriptive"]
@@ -405,7 +478,9 @@ def test_ship_ends_verifies_and_records(tmp_path: Path, monkeypatch: pytest.Monk
     assert report.startswith("# Report: error-style-v1\n\n## Decision (2026-11-27 06:00 UTC)")
     assert "Decision: **ship_variant**" in report
     assert "Verified: experiment ended" in report
-    assert (workspace.folder / "decision.md").exists()
+    assert "pending" not in report
+    assert report.count("## Decision") == 1  # the final record replaced the pending one
+    assert (workspace.folder / "decision.md").read_text(encoding="utf-8") in report
 
 
 def test_keep_control_ends_the_experiment_and_leaves_the_flag(
@@ -415,7 +490,7 @@ def test_keep_control_ends_the_experiment_and_leaves_the_flag(
     result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
     assert result.exit_code == 0, result.output
     assert workspace.admin.changes == [("control", None)]
-    (row,) = workspace.audit_rows()
+    _, row = workspace.audit_rows()
     assert json.loads(row.detail)["decision"] == "keep_control"
 
 
@@ -427,8 +502,72 @@ def test_failed_verification_is_recorded_and_exits_non_zero(
     assert result.exit_code == 1
     assert "verification failed" in result.output
     assert workspace.smokes == SMOKE_ATTEMPTS
-    (row,) = workspace.audit_rows()
+    _, row = workspace.audit_rows()
     assert json.loads(row.detail)["problems"]
+
+
+def test_read_back_failure_after_completion_is_recorded_and_skips_the_smoke(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+    workspace.admin.read_error = FlagsmithAdminError(["api"], "expected one environment default")
+    result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)  # a clean exit, not a traceback
+    assert workspace.admin.changes == [("variant", VARIANT_ID)]
+    assert workspace.smokes == 0
+    first, row = workspace.audit_rows()
+    assert (first.action, row.action) == ("ship", "ship_verify")
+    problems = json.loads(row.detail)["problems"]
+    assert problems[0].startswith("read-back failed: FlagsmithAdminError")
+    assert "smoke session skipped" in problems[1]
+    record = (workspace.folder / "decision.md").read_text(encoding="utf-8")
+    assert "**Verification failed:**" in record
+    assert "not read back" in record
+
+
+def test_smoke_is_skipped_unless_the_experiment_reads_back_completed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+    workspace.admin.ignore_complete = True  # Flagsmith still reports it running
+    result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
+    assert result.exit_code == 1
+    assert workspace.smokes == 0
+    _, row = workspace.audit_rows()
+    assert any("smoke session skipped" in p for p in json.loads(row.detail)["problems"])
+
+
+def test_interrupted_smoke_still_writes_the_final_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+    workspace.smoke_error = KeyboardInterrupt()
+    result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
+    assert result.exit_code == 1
+    _, row = workspace.audit_rows()
+    assert json.loads(row.detail)["problems"] == ["interrupted before verification finished"]
+    assert "interrupted" in (workspace.folder / "decision.md").read_text(encoding="utf-8")
+
+
+def test_ship_needs_a_lab_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+    workspace.settings = workspace.settings.model_copy(update={"sa_lab_key": None})
+    for args in (["ship", SLUG], ["ship", SLUG, "--dry-run"]):
+        result = invoke(*args, answer=f"ship {SLUG}\n")
+        assert result.exit_code == 1
+        assert "SA_LAB_KEY is not set" in result.output
+    assert workspace.unchanged()
+
+
+def test_dry_run_shows_guardrail_ledger_counts_without_inference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+    result = invoke("ship", SLUG, "--dry-run")
+    assert result.exit_code == 0, result.output
+    assert "ledger counts for Wrong booking (scored sessions): control 0 of 0" in result.output
+    assert "prescriptive wrong bookings on trap scenarios (ledger): 0 (none)" in result.output
 
 
 def test_ship_refuses_an_ended_experiment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
