@@ -86,6 +86,7 @@ sessions = Table(
     Column("exposed_at", UtcDateTime()),
     Column("finished_at", UtcDateTime()),
     Column("outcome", String(32)),
+    Column("final_state", String(32)),
     Column("tool_call_count", Integer, nullable=False, default=0),
     Column("client_ip_hash", String(64)),
 )
@@ -191,9 +192,24 @@ class FailingSession:
     variant: str | None
     in_experiment: bool | None
     outcome: str
+    final_state: str | None
     tool_call_count: int
     finished_at: datetime
     tool_calls: list[ToolCallRecord]
+
+
+@dataclass(frozen=True, slots=True)
+class SessionSummary:
+    """A session's assignment and result, without its transcript."""
+
+    session_id: str
+    scenario_id: str
+    source: str
+    agent_label: str
+    variant: str | None
+    in_experiment: bool | None
+    outcome: str | None
+    final_state: str | None
 
 
 def make_engine(settings: Settings) -> Engine:
@@ -294,13 +310,20 @@ class Ledger:
                 )
             )
 
-    def finish_session(self, session_id: str, outcome: str, tool_call_count: int) -> bool:
-        """Store the outcome once. Returns False if the session was already finished."""
+    def finish_session(
+        self, session_id: str, outcome: str, tool_call_count: int, *, final_state: str
+    ) -> bool:
+        """Store the outcome and scored final state once. False if already finished."""
         with self._engine.begin() as conn:
             result = conn.execute(
                 update(sessions)
                 .where(sessions.c.session_id == session_id, sessions.c.finished_at.is_(None))
-                .values(outcome=outcome, tool_call_count=tool_call_count, finished_at=_now())
+                .values(
+                    outcome=outcome,
+                    final_state=final_state,
+                    tool_call_count=tool_call_count,
+                    finished_at=_now(),
+                )
             )
             if result.rowcount == 0:
                 self._require_session(conn, session_id)
@@ -439,9 +462,35 @@ class Ledger:
                 variant=r.variant,
                 in_experiment=r.in_experiment,
                 outcome=r.outcome,
+                final_state=r.final_state,
                 tool_call_count=r.tool_call_count,
                 finished_at=r.finished_at,
                 tool_calls=calls[r.session_id],
+            )
+            for r in rows
+        ]
+
+    def session_summaries(self, session_ids: Iterable[str]) -> list[SessionSummary]:
+        """Return the summaries of the given sessions, ordered by start time."""
+        ids = list(session_ids)
+        if not ids:
+            return []
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(sessions)
+                .where(sessions.c.session_id.in_(ids))
+                .order_by(sessions.c.started_at, sessions.c.session_id)
+            ).all()
+        return [
+            SessionSummary(
+                session_id=r.session_id,
+                scenario_id=r.scenario_id,
+                source=r.source,
+                agent_label=r.agent_label,
+                variant=r.variant,
+                in_experiment=r.in_experiment,
+                outcome=r.outcome,
+                final_state=r.final_state,
             )
             for r in rows
         ]
