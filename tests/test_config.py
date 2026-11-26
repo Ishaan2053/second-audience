@@ -11,6 +11,7 @@ ALL_VARS = (
     "SA_ENV",
     "FLAGSMITH_ENVIRONMENT_KEY",
     "FLAGSMITH_API_URL",
+    "FLAGSMITH_REQUEST_TIMEOUT_SECONDS",
     "SA_FLAG_NAME",
     "SA_DATABASE_URL",
     "GEMINI_API_KEY",
@@ -48,6 +49,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = load(monkeypatch)
     assert settings.sa_env == "dev"
     assert settings.sa_flag_name == "error_style"
+    assert settings.flagsmith_request_timeout_seconds == 2
     assert settings.sa_database_url.get_secret_value() == "sqlite:///./sa.db"
     assert settings.sa_max_tool_calls == 12
     assert settings.sa_session_idle_seconds == 600
