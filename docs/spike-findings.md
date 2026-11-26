@@ -547,3 +547,20 @@ and `gemini-2.5-pro` start auto-routing to newer models on 2026-12-01, after the
     client behind any number of proxy hops, but a client can prepend a fake value to dodge
     the per-IP limit; the global session cap still bounds the load. Check on the host that
     field sessions from two networks get two different `client_ip_hash` values in the ledger.
+
+## Public deployment (SA-11)
+
+- **Host terms changed in 2026.** Hugging Face Docker Spaces now need a paid plan (PRO) to
+  create; only ZeroGPU Gradio Spaces stay free. Koyeb's free instance now needs a card with
+  a $29 pre-authorisation. Render's free web service still needs no card, so it is the host
+  (`docs/deployment.md`, section 1).
+- **Render passes its variables to Docker builds as build args,** including the default
+  `RENDER_GIT_COMMIT`. The Dockerfile declares `ARG SA_GIT_COMMIT=${RENDER_GIT_COMMIT}`, so
+  `/healthz` shows the commit on Render with no extra configuration, and an explicit
+  `--build-arg SA_GIT_COMMIT=...` still wins (checked locally with both).
+- **Blueprint `sync: false` values belong to the Dashboard.** Render prompts for them only
+  when the Blueprint is created and never overwrites them on sync, which is why the kill
+  switch `SA_FIELD_ENABLED` is declared that way rather than with a `value:`.
+- **750 free hours per workspace, not per service.** An always-awake service uses about 744
+  in a 31-day month, so the keep-alive ping is safe only while this is the workspace's only
+  free web service.

@@ -40,8 +40,8 @@ flowchart LR
 ```
 second-audience/
   CLAUDE.md  AGENTS.md  README.md  HYPOTHESIS.md  LICENSE
-  pyproject.toml  uv.lock  .env.example  Dockerfile
-  .github/workflows/ci.yml
+  pyproject.toml  uv.lock  .env.example  Dockerfile  .dockerignore  render.yaml
+  .github/workflows/ci.yml  keepalive.yml
   experiments/error-style-v1.yaml
   reports/                      generated reports and saved results JSON
   docs/
@@ -467,8 +467,9 @@ sessions there silently (`docs/checkpoint-a.md`).
 
 ### 3.9 Public endpoint
 
-One container on a free host, serving MCP over streamable HTTP at `/mcp`, a plain landing
-page at `/` (what this is, what is logged, how to connect) and `/healthz`.
+One container on a Render free web service (`docs/deployment.md`), serving MCP over
+streamable HTTP at `/mcp`, a plain landing page at `/` (what this is, what is logged, how to
+connect) and `/healthz`.
 
 Protection: per-IP session rate limit, per-session call budget, idle timeout, a cap on
 concurrent sessions, and no personal data in the ledger (IP stored only as a salted hash).
