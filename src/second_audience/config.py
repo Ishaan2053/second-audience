@@ -27,6 +27,7 @@ class Settings(BaseSettings):
 
     flagsmith_environment_key: SecretStr | None = None
     flagsmith_api_url: str | None = None
+    flagsmith_request_timeout_seconds: int = Field(default=2, gt=0)
     sa_flag_name: str = "error_style"
 
     sa_database_url: SecretStr = SecretStr("sqlite:///./sa.db")
