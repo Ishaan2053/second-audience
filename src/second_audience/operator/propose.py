@@ -3,9 +3,9 @@
 Code builds the evidence from the ledger, including whether each agent followed the
 `corrected_call` it was offered. A model reads that evidence and proposes one new error style
 with a written rationale. Code then checks the proposal: the style must be expressible with
-the existing `ErrorStyle` settings and differ from every arm already tested, cited sessions
-must be in the evidence, prose may only use numbers from the evidence, and the slug must be
-new. The output is two files for a human to review. Nothing is created in Flagsmith.
+the existing `ErrorStyle` settings and render differently from every arm already tested,
+cited sessions must be in the evidence, prose may only use the computed figures, and the slug
+must be new. The output is two files for a human to review. Nothing is created in Flagsmith.
 """
 
 import json
@@ -44,11 +44,11 @@ SETTING_MEANINGS: dict[str, str] = {
     ),
     "corrected_call": (
         "adds a `corrected_call` object: the failed call with the suggestion applied, ready "
-        "to send; it only takes effect together with suggest_alternative"
+        "to send; it is only valid together with suggest_alternative"
     ),
     "caution_note": (
-        f"adds a `note` with the fixed text {CAUTION_NOTE!r}; it only appears when a "
-        "suggestion is present"
+        f"adds a `note` with the fixed text {CAUTION_NOTE!r}; it is only valid together with "
+        "suggest_alternative and only appears when a suggestion is present"
     ),
 }
 """What each `ErrorStyle` setting adds to a styled error (`booking/errors.py`)."""
@@ -167,6 +167,21 @@ class Evidence:
     def session_ids(self) -> set[str]:
         """IDs of the sessions in the pack, the only ones a proposal may cite."""
         return {s["session_id"] for s in self.sessions}
+
+    def figures(self) -> dict[str, Any]:
+        """The computed numbers the model's prose may quote, and nothing else."""
+        return {
+            "outcomes_by_arm_and_kind": self.outcome_rows,
+            "corrected_calls_followed": self.suggestion_rows,
+            "best_known_arm": self.control_reason,
+            "tool_calls_per_session": [s["tool_calls"] for s in self.sessions],
+        }
+
+    def identifiers(self) -> list[str]:
+        """Names that contain digits but are not figures: slugs, arm keys and scenario IDs."""
+        names = {self.spec.slug, *self.taken_slugs, *(arm.key for arm in self.spec.arms)}
+        names |= {s["scenario_id"] for s in self.sessions}
+        return sorted(names, key=len, reverse=True)
 
     def pack(self) -> dict[str, Any]:
         """The JSON the model gets."""
@@ -300,16 +315,28 @@ class Draft:
     spec: ExperimentSpec
 
 
+_NEEDS_SUGGESTION = ("corrected_call", "caution_note")
+"""Settings `render_error` applies only after a suggestion is built (`booking/errors.py`)."""
+
+
+def rendered_behaviour(style: ErrorStyle) -> tuple[bool, ...]:
+    """What a style actually adds to a styled error; equal tuples render identically."""
+    if not style.suggest_alternative:
+        return (False,) * len(ErrorStyle.model_fields)
+    return tuple(getattr(style, name) for name in ErrorStyle.model_fields)
+
+
 def _variant_style(settings: list[str]) -> tuple[dict[str, bool] | None, list[str]]:
     """The variant's flag value from the settings named true, or the reasons it is not valid."""
     known = list(ErrorStyle.model_fields)
     unknown = sorted(set(settings) - set(known))
     if unknown:
         return None, [f"unknown error style settings {unknown}; the only settings are {known}"]
-    value = {name: name in settings for name in known}
-    if ErrorStyle.model_validate(value).model_dump() != value:
-        return None, ["corrected_call takes effect only together with suggest_alternative"]
-    return value, []
+    if "suggest_alternative" not in settings:
+        dependent = [name for name in _NEEDS_SUGGESTION if name in settings]
+        if dependent:
+            return None, [f"{dependent} take effect only together with suggest_alternative"]
+    return {name: name in settings for name in known}, []
 
 
 def build_spec(evidence: Evidence, proposal: Proposal, value: dict[str, bool]) -> ExperimentSpec:
@@ -350,14 +377,19 @@ def validate(raw: str, evidence: Evidence) -> Draft:
     problems: list[str] = []
     if proposal.slug in evidence.taken_slugs:
         problems.append(f"slug {proposal.slug!r} is already taken")
-    if proposal.variant_key == CONTROL_KEY:
-        problems.append(f"variant_key must not be {CONTROL_KEY!r}")
+    arm_keys = [arm.key for arm in evidence.spec.arms]
+    if proposal.variant_key in {CONTROL_KEY, *arm_keys}:
+        problems.append(
+            f"variant_key must not be {CONTROL_KEY!r} or an arm key of "
+            f"{evidence.spec.slug} {arm_keys}, so the ledger keeps the arms apart"
+        )
     value, style_problems = _variant_style(proposal.variant_settings)
     problems += style_problems
     if value is not None:
-        tested = [arm.key for arm in evidence.spec.arms if arm.style.model_dump() == value]
+        behaviour = rendered_behaviour(ErrorStyle.model_validate(value))
+        tested = [a.key for a in evidence.spec.arms if rendered_behaviour(a.style) == behaviour]
         if tested:
-            problems.append(f"the variant is the same style as arm {tested[0]!r}, already tested")
+            problems.append(f"the variant renders the same as arm {tested[0]!r}, already tested")
     metric_names = [m.name for m in evidence.spec.metrics]
     if proposal.primary_metric not in metric_names:
         problems.append(f"primary_metric must be one of {metric_names}")
@@ -368,7 +400,7 @@ def validate(raw: str, evidence: Evidence) -> Draft:
     unknown = sorted(cited - evidence.session_ids)
     if unknown:
         problems.append(f"cited sessions not in the evidence: {unknown}")
-    bad_numbers = unsupported_numbers(prose, evidence.pack())
+    bad_numbers = unsupported_numbers(_without_identifiers(prose, evidence), evidence.figures())
     if bad_numbers:
         problems.append(f"numbers not in the evidence: {bad_numbers}")
     if problems or value is None:
@@ -378,6 +410,14 @@ def validate(raw: str, evidence: Evidence) -> Draft:
     except ValidationError as error:
         raise ProposalRejectedError(f"the spec built from it is invalid: {error}") from error
     return Draft(proposal, spec)
+
+
+def _without_identifiers(prose: str, evidence: Evidence) -> str:
+    """The prose without session IDs and other names, so their digits are not read as numbers."""
+    prose = _SESSION_ID.sub(" ", prose)
+    for name in evidence.identifiers():
+        prose = prose.replace(name, " ")
+    return prose
 
 
 @dataclass(frozen=True)
@@ -418,13 +458,18 @@ def spec_yaml(spec: ExperimentSpec, source: str) -> str:
     return f"# {DRAFT_HEADER}\n# Proposed by `sa propose` from experiment {source}.\n{body}"
 
 
+def _cell(value: object) -> str:
+    """One table cell: n/a when missing; pipes and line breaks escaped (field data is untrusted)."""
+    if value is None:
+        return "n/a"
+    text = str(value).replace("\\", "\\\\").replace("|", "\\|")
+    return " ".join(text.split())
+
+
 def _table(header: list[str], rows: Iterable[Iterable[object]]) -> list[str]:
     """A Markdown table; missing values as n/a."""
     lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
-    lines += [
-        "| " + " | ".join("n/a" if cell is None else str(cell) for cell in row) + " |"
-        for row in rows
-    ]
+    lines += ["| " + " | ".join(_cell(cell) for cell in row) + " |" for row in rows]
     return lines
 
 
@@ -507,7 +552,9 @@ def rationale_markdown(
         "",
         "## Next step",
         "",
-        "Review and edit the spec and this file, commit them, then run `sa start` "
+        f"Review and edit the spec and this file. Move the spec to `experiments/{spec.slug}.yaml` "
+        f"(where `sa status` and `sa report` look for it), add a `{spec.slug}` entry to "
+        f"`HYPOTHESIS.md`, commit both, then run `sa start experiments/{spec.slug}.yaml` "
         "(`--dry-run` first). Only one experiment may run on the flag at a time.",
         "",
     ]

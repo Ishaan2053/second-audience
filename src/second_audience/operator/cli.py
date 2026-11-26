@@ -384,7 +384,9 @@ def propose(
         typer.echo(f"First answer rejected ({attempts[0].error}); the retry passed.")
     typer.echo(f"Spec: {spec_file.as_posix()}")
     typer.echo(f"Rationale: {rationale_file.as_posix()}")
+    target = DEFAULT_SPEC.parent / f"{slug}.yaml"
     typer.echo(
-        f"Next: review and edit both files, commit them, then `sa start {spec_file.as_posix()}` "
-        "(try --dry-run first)."
+        f"Next: review and edit both files, move the spec to {target.as_posix()} (where "
+        f"`sa status` and `sa report` look for it), add a {slug} entry to HYPOTHESIS.md, "
+        f"commit both, then `sa start {target.as_posix()}` (try --dry-run first)."
     )

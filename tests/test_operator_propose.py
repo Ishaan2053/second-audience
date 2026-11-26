@@ -27,6 +27,8 @@ from second_audience.operator.propose import (
     ProposalRejectedError,
     build_evidence,
     followed_suggestions,
+    rationale_markdown,
+    rendered_behaviour,
     validate,
 )
 from second_audience.operator.repo import Repo
@@ -224,6 +226,8 @@ def test_valid_answer_builds_a_spec_against_the_best_known_arm(evidence: Evidenc
     [
         ({"variant_settings": ["suggest_alternative", "verbose_hint"]}, "unknown error style"),
         ({"variant_settings": ["corrected_call"]}, "only together with suggest_alternative"),
+        # A note without a suggestion never renders, so this would be an A/A test.
+        ({"variant_settings": ["caution_note"]}, "only together with suggest_alternative"),
         (
             {"variant_settings": ["suggest_alternative", "corrected_call"]},
             "already tested",
@@ -231,6 +235,7 @@ def test_valid_answer_builds_a_spec_against_the_best_known_arm(evidence: Evidenc
         ({"variant_settings": []}, "already tested"),
         ({"slug": SLUG}, "already taken"),
         ({"variant_key": "control"}, "must not be 'control'"),
+        ({"variant_key": "prescriptive"}, "or an arm key of error-style-v1"),
         ({"primary_metric": "Happiness"}, "primary_metric must be one of"),
         ({"cited_sessions": [sid(99)]}, "cited sessions not in the evidence"),
         ({"cited_sessions": []}, "cite at least one session"),
@@ -244,6 +249,41 @@ def test_invalid_answers_are_rejected(
 ) -> None:
     with pytest.raises(ProposalRejectedError, match=reason):
         validate(answer(**overrides), evidence)
+
+
+def test_styles_compare_by_what_they_render() -> None:
+    control = rendered_behaviour(ErrorStyle())
+    assert rendered_behaviour(ErrorStyle(caution_note=True)) == control
+    assert rendered_behaviour(ErrorStyle(suggest_alternative=True, caution_note=True)) != control
+
+
+def test_invented_count_is_rejected_even_inside_a_session_id(evidence: Evidence) -> None:
+    hidden = "42" + sid(3)[2:]  # the digits 42 occur only inside this session ID
+    session = {**evidence.sessions[0], "session_id": hidden}
+    tweaked = replace(evidence, sessions=[session])
+    assert "42" in json.dumps(tweaked.pack())
+    cited = {"cited_sessions": [hidden], "observed_pattern": f"See {hidden}."}
+    with pytest.raises(ProposalRejectedError, match=r"numbers not in the evidence: \['42'\]"):
+        validate(answer(**cited, rationale=f"In {hidden}, 42 agents gave up."), tweaked)
+    # The ID itself, the slug and computed figures pass.
+    fine = f"In {hidden} of error-style-v1 the trap sessions averaged 2.00 tool calls."
+    assert validate(answer(**cited, rationale=fine), tweaked).spec.slug == NEW_SLUG
+
+
+def test_transcript_arguments_are_not_a_source_of_numbers(evidence: Evidence) -> None:
+    # 18 occurs only in the transcripts' arguments (date 2027-03-18), never in a figure.
+    assert "18" in json.dumps(evidence.pack())
+    with pytest.raises(ProposalRejectedError, match="numbers not in the evidence"):
+        validate(answer(rationale="Agents failed 18 times."), evidence)
+
+
+def test_rationale_table_cells_escape_pipes_and_line_breaks(evidence: Evidence) -> None:
+    sessions = [{**s, "model": "evil | agent\n| injected |"} for s in evidence.sessions]
+    tweaked = replace(evidence, sessions=sessions)
+    text = rationale_markdown(tweaked, validate(answer(), tweaked), "x.yaml", "m", AT)
+    row = next(line for line in text.splitlines() if line.startswith(f"| `{sid(3)}`"))
+    assert r"| evil \| agent \| injected \| |" in row
+    assert not any(line.startswith("| injected") for line in text.splitlines())
 
 
 def test_malformed_answer_is_rejected(evidence: Evidence) -> None:
@@ -317,7 +357,9 @@ def test_propose_writes_a_valid_spec_and_rationale(
     assert result.exit_code == 0, result.output
     spec_file = workspace.proposals / f"{NEW_SLUG}.yaml"
     assert f"Spec: experiments/proposals/{NEW_SLUG}.yaml" in result.output
-    assert "review and edit both files, commit them, then `sa start" in result.output
+    assert f"move the spec to experiments/{NEW_SLUG}.yaml" in result.output
+    assert f"add a {NEW_SLUG} entry to HYPOTHESIS.md" in result.output
+    assert f"then `sa start experiments/{NEW_SLUG}.yaml`" in result.output
 
     text = spec_file.read_text(encoding="utf-8")
     assert text.startswith(f"# {DRAFT_HEADER}")
@@ -406,7 +448,11 @@ def test_start_dry_run_accepts_the_generated_spec(
     workspace = Workspace(root, monkeypatch, FakeModel(answer()))
     assert invoke("propose").exit_code == 0
 
-    # The human reviews, pre-registers the slug and commits, as the next step says.
+    # The human reviews, moves the spec, pre-registers the slug and commits, as the next
+    # step says.
+    (root / "experiments" / "proposals" / f"{NEW_SLUG}.yaml").rename(
+        root / "experiments" / f"{NEW_SLUG}.yaml"
+    )
     (root / "HYPOTHESIS.md").write_text(f"# Hypothesis\n\nExperiment {NEW_SLUG}.\n")
     _git(root, "init", "-q")
     _git(root, "config", "user.name", "Test Approver")
@@ -433,7 +479,7 @@ def test_start_dry_run_accepts_the_generated_spec(
         open_repo=Repo.discover,
     )
     monkeypatch.setattr(cli, "make_context", lambda: context)
-    result = invoke("start", f"experiments/proposals/{NEW_SLUG}.yaml", "--dry-run")
+    result = invoke("start", f"experiments/{NEW_SLUG}.yaml", "--dry-run")
     assert result.exit_code == 0, result.output
     assert "REFUSED" not in result.output
     assert "create variant cautious" in result.output
