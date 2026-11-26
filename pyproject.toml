@@ -34,6 +34,10 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "C4", "RUF", "N", "PT"]
 
+[tool.ruff.lint.per-file-ignores]
+# Domain errors keep the names the architecture and tickets use (RoomConflict, ...).
+"src/second_audience/booking/world.py" = ["N818"]
+
 [tool.mypy]
 strict = true
 python_version = "3.12"
