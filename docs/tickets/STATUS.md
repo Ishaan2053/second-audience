@@ -12,7 +12,7 @@ Statuses: `pending`, `in progress`, `blocked`, `done`, `cut`. Update at the end 
 | SA-06 | Experiment client for Flagsmith | done | #12 | #13 | Lazy exposure via get_experiment_flag; 2 s timeout, one retry; network test 9/11 split on Development |
 | SA-07 | MCP server, session lifecycle and Checkpoint A | done | #14 | #15 | Checkpoint A exact match (40 sessions); local `.env` holds the Production Flagsmith key |
 | SA-08 | Lab runner on Gemini | done | #16 | #17 | Pilot 68 sessions: exposure 24% (below ~60%; SA-09 must revisit scenarios); models gemini-3.1/3.5-flash-lite (2.5-flash-lite 404) |
-| SA-09 | Operator: spec, doctor, start, and going live (Checkpoint B) | pending | | | |
+| SA-09 | Operator: spec, doctor, start, and going live (Checkpoint B) | in progress | #18 | #19 | Operator merged first; Checkpoint B (production start, lab run, `v0.1.0`) follows. Primary metric is now tool calls per session (pilot ceiling on completion) |
 | SA-10 | Field hardening for the public endpoint | pending | | | |
 | SA-11 | Public deployment | pending | | | |
 | SA-12 | Operator: status and report | pending | | | |
