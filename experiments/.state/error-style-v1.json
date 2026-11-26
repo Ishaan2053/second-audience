@@ -1,0 +1,20 @@
+{
+  "slug": "error-style-v1",
+  "environment": "production",
+  "environment_key": "Ek4jqbHfVQuaQ4Gi6vzkhs",
+  "flag": "error_style",
+  "feature_id": 305704,
+  "variant_ids": {
+    "prescriptive": 37324
+  },
+  "metric_ids": {
+    "Tool calls per session": 665,
+    "Task completed correctly": 666,
+    "Wrong booking": 667
+  },
+  "experiment_id": 680,
+  "started_at": "2026-11-26T15:29:45.392726Z",
+  "commit": "3679478b0c24014f42981cac37d94084e6edf3d2",
+  "approved_by": "Ishaan2053",
+  "recorded_at": "2026-11-26T15:29:46.010172+00:00"
+}
