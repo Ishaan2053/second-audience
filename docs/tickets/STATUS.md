@@ -11,7 +11,7 @@ Statuses: `pending`, `in progress`, `blocked`, `done`, `cut`. Update at the end 
 | SA-05 | Session ledger | done | #9 | #10 | Verified on SQLite and on Supabase Postgres (22 network tests passed) |
 | SA-06 | Experiment client for Flagsmith | done | #12 | #13 | Lazy exposure via get_experiment_flag; 2 s timeout, one retry; network test 9/11 split on Development |
 | SA-07 | MCP server, session lifecycle and Checkpoint A | done | #14 | #15 | Checkpoint A exact match (40 sessions); local `.env` holds the Production Flagsmith key |
-| SA-08 | Lab runner on Gemini | pending | | | |
+| SA-08 | Lab runner on Gemini | done | #16 | #17 | Pilot 68 sessions: exposure 24% (below ~60%; SA-09 must revisit scenarios); models gemini-3.1/3.5-flash-lite (2.5-flash-lite 404) |
 | SA-09 | Operator: spec, doctor, start, and going live (Checkpoint B) | pending | | | |
 | SA-10 | Field hardening for the public endpoint | pending | | | |
 | SA-11 | Public deployment | pending | | | |
