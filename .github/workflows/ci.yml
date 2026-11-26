@@ -73,6 +73,22 @@ jobs:
           enable-cache: true
       - run: uv build
 
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build --build-arg SA_GIT_COMMIT=${{ github.sha }} -t second-audience:ci .
+      # Start the image with defaults (SQLite, no Flagsmith) and wait for /healthz.
+      - run: |
+          docker run -d --name sa -p 10000:10000 second-audience:ci
+          for _ in $(seq 30); do
+            if curl -fsS http://127.0.0.1:10000/healthz; then exit 0; fi
+            sleep 1
+          done
+          docker logs sa
+          exit 1
+
   audit:
     name: Dependency audit (non-blocking)
     runs-on: ubuntu-latest
