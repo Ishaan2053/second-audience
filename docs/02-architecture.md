@@ -68,6 +68,10 @@ second-audience/
       flagsmith_admin.py        CLI and Admin API wrapper
       spec.py                   experiment spec model
       report.py  propose.py  ship.py  gemini.py
+    demo/
+      pairs.py                  replay candidates and pattern counts (scripts/find_pairs.py)
+      replay.py                 side-by-side transcript replay (scripts/replay.py)
+  scripts/                      smoke.py, replay.py, find_pairs.py, spike_flagsmith.py
   tests/
 ```
 
@@ -401,6 +405,31 @@ erDiagram
 - `start_session` accepts only a 16-64 character lowercase hex digest as `client_ip_hash`,
   so a raw IP address cannot be written through the ledger's API.
 - Postgres URLs use the psycopg 3 driver: `postgresql+psycopg://user:pass@host/db`.
+- Readers that must not write (the demo kit, SA-15) open the ledger with
+  `make_engine(settings, read_only=True)` and `Ledger(engine, create_schema=False)`: Postgres
+  transactions are opened READ ONLY (`postgresql_readonly`) and SQLite connections set
+  `PRAGMA query_only`, so the database refuses a write rather than relying on the caller.
+
+### 3.6.1 Demo kit (`demo/`, SA-15)
+
+`scripts/replay.py` replays two finished, exposed sessions on the same scenario side by side
+(control left, challenger right) from the ledger, step by step (`--delay` seconds, or
+`--step` to wait for Enter), with the first styled error and the suggestion block
+highlighted, and each session's outcome and tool-call count at the end. It states on screen
+that it is a replay of recorded sessions, when they were recorded, and their source (lab or
+field). `--sessions` names a pair and refuses sessions that differ in scenario, source or
+model, or that are `sa ship` smoke runs; `--scenario [--model] [--source] [--slug]` takes
+the newest pair from the population below.
+
+`scripts/find_pairs.py` works on the population `sa report` analyses: scored sessions (the
+`scored` and `ship_smoke` predicates of `operator/analysis.py`) of one source (`--source`,
+default `lab`) started since the experiment's start (`--slug`, default `error-style-v1`, read
+from `experiments/.state/<slug>.json`). It groups them into cells (source, scenario, agent
+label), lists every control x challenger pair and flags differing outcomes, and prints
+session counts per kind and arm (with the exposed sessions left out as not scored) and pair
+counts per kind, challenger variant, outcome and tool-call pattern, favourable or not, so a
+chosen replay can be described honestly. Every table title names the source and the window.
+The shot list is `docs/demo-script.md`.
 
 ### 3.7 Lab runner (`lab/`)
 

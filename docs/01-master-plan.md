@@ -104,6 +104,7 @@ See `05-risk-register.md`.
 ## 7. Demonstration and submission
 
 **Demo flow (target three to four minutes; confirm any length limit on the submission form).**
+The shots, commands, narration and fallbacks are in `docs/demo-script.md`.
 
 1. **Problem (20s).** "You A/B test the interface humans use. The one agents use is never measured."
 2. **Side by side (40s).** Two recorded agent sessions on the same trap scenario: one arm
