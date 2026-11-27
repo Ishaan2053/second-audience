@@ -416,14 +416,20 @@ erDiagram
 (control left, challenger right) from the ledger, step by step (`--delay` seconds, or
 `--step` to wait for Enter), with the first styled error and the suggestion block
 highlighted, and each session's outcome and tool-call count at the end. It states on screen
-that it is a replay of recorded sessions and when they were recorded. `--sessions` names a
-pair; `--scenario [--model]` takes the newest pair.
+that it is a replay of recorded sessions, when they were recorded, and their source (lab or
+field). `--sessions` names a pair and refuses sessions that differ in scenario, source or
+model, or that are `sa ship` smoke runs; `--scenario [--model] [--source] [--slug]` takes
+the newest pair from the population below.
 
-`scripts/find_pairs.py` groups exposed sessions into cells (source, scenario, agent label),
-lists every control x challenger pair and flags differing outcomes, and prints session counts
-per kind and arm and pair counts per outcome and tool-call pattern, favourable or not, so a
-chosen replay can be described honestly. `sa ship` smoke sessions are excluded, as in the
-report. The shot list is `docs/demo-script.md`.
+`scripts/find_pairs.py` works on the population `sa report` analyses: scored sessions (the
+`scored` and `ship_smoke` predicates of `operator/analysis.py`) of one source (`--source`,
+default `lab`) started since the experiment's start (`--slug`, default `error-style-v1`, read
+from `experiments/.state/<slug>.json`). It groups them into cells (source, scenario, agent
+label), lists every control x challenger pair and flags differing outcomes, and prints
+session counts per kind and arm (with the exposed sessions left out as not scored) and pair
+counts per kind, challenger variant, outcome and tool-call pattern, favourable or not, so a
+chosen replay can be described honestly. Every table title names the source and the window.
+The shot list is `docs/demo-script.md`.
 
 ### 3.7 Lab runner (`lab/`)
 
