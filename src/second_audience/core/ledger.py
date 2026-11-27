@@ -641,7 +641,10 @@ class Ledger:
         return self._session_records(sessions.c.session_id.in_(ids))
 
     def exposed_sessions(
-        self, scenario_id: str | None = None, agent_label: str | None = None
+        self,
+        scenario_id: str | None = None,
+        agent_label: str | None = None,
+        since: datetime | None = None,
     ) -> list[SessionRecord]:
         """Finished sessions exposed to an arm, oldest first, optionally narrowed."""
         conditions: list[ColumnElement[bool]] = [
@@ -649,6 +652,8 @@ class Ledger:
             sessions.c.variant.is_not(None),
             sessions.c.finished_at.is_not(None),
         ]
+        if since is not None:
+            conditions.append(sessions.c.started_at >= since)
         if scenario_id is not None:
             conditions.append(sessions.c.scenario_id == scenario_id)
         if agent_label is not None:

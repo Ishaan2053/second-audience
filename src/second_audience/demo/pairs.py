@@ -1,25 +1,36 @@
 """Pairs of recorded sessions on the same scenario and model, one per arm, with honest counts.
 
-A cell is one source, scenario and agent label. Every control session in a cell is paired
-with every challenger session in it, so one session can appear in several pairs. Pairs are
-for choosing a replay; the session-level counts are what a claim about the demo should cite.
+The population is what `sa report` analyses: scored sessions (enrolled, finished, not
+abandoned) of one traffic source, started since the experiment's start, without `sa ship`
+smoke runs. A cell is one source, scenario and agent label. Every control session in a cell
+is paired with every challenger session in it, so one session can appear in several pairs.
+Pairs are for choosing a replay; the session-level counts are what a claim should cite.
 """
 
 import argparse
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
+from typing import get_args
 
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
+from sqlalchemy.exc import SQLAlchemyError
 
 from second_audience.booking.checker import Outcome
 from second_audience.config import get_settings
-from second_audience.core.ledger import Ledger, SessionRecord, make_engine
-from second_audience.operator.analysis import ship_smoke
+from second_audience.core.ledger import Ledger, SessionRecord, Source, make_engine
+from second_audience.operator.analysis import RunState, scored, ship_smoke
 from second_audience.operator.spec import CONTROL_KEY
+from second_audience.operator.start import state_path
+
+DEFAULT_SLUG = "error-style-v1"
+SOURCES: tuple[str, ...] = get_args(Source)
+_EXPERIMENTS = Path("experiments")
 
 
 class OutcomePattern(StrEnum):
@@ -83,6 +94,16 @@ class Pair:
         return latest, self.control.session_id, self.challenger.session_id
 
 
+def experiment_start(slug: str) -> datetime:
+    """When `sa start` started the experiment, from `experiments/.state/<slug>.json`."""
+    return RunState.load(state_path(_EXPERIMENTS / f"{slug}.yaml", slug)).started_at
+
+
+def population(records: Iterable[SessionRecord], source: str) -> list[SessionRecord]:
+    """The sessions `sa report` analyses, from one source: scored and not a smoke run."""
+    return [r for r in records if r.source == source and scored(r) and not ship_smoke(r)]
+
+
 def _cell(record: SessionRecord) -> Cell:
     return Cell(record.source, record.scenario_id, record.scenario_kind, record.agent_label)
 
@@ -90,13 +111,11 @@ def _cell(record: SessionRecord) -> Cell:
 def by_cell(
     records: Iterable[SessionRecord],
 ) -> dict[Cell, tuple[list[SessionRecord], list[SessionRecord]]]:
-    """Group exposed sessions into cells of (control, challenger) lists; smoke runs excluded."""
+    """Group a `population` into cells of (control, challenger) lists."""
     cells: dict[Cell, tuple[list[SessionRecord], list[SessionRecord]]] = defaultdict(
         lambda: ([], [])
     )
     for record in records:
-        if record.variant is None or ship_smoke(record):
-            continue
         control, challenger = cells[_cell(record)]
         (control if record.variant == CONTROL_KEY else challenger).append(record)
     return dict(sorted(cells.items(), key=lambda item: _cell_key(item[0])))
@@ -112,7 +131,7 @@ def pairs_in(control: list[SessionRecord], challenger: list[SessionRecord]) -> l
 
 
 def all_pairs(records: Iterable[SessionRecord]) -> list[Pair]:
-    """Every pair across all cells."""
+    """Every pair across all cells of a `population`."""
     return [pair for c, p in by_cell(records).values() for pair in pairs_in(c, p)]
 
 
@@ -122,57 +141,74 @@ def newest_pair(records: Iterable[SessionRecord]) -> Pair | None:
     return max(pairs, key=lambda pair: pair.recency) if pairs else None
 
 
-def pattern_counts(pairs: Iterable[Pair]) -> Counter[tuple[str, OutcomePattern, CallsPattern]]:
-    """Count pairs by scenario kind, outcome pattern and calls pattern."""
+PatternKey = tuple[str, str, OutcomePattern, CallsPattern]
+
+
+def pattern_counts(pairs: Iterable[Pair]) -> Counter[PatternKey]:
+    """Count pairs by scenario kind, challenger variant, outcome pattern and calls pattern."""
     return Counter(
-        (pair.control.scenario_kind, pair.outcome_pattern, pair.calls_pattern) for pair in pairs
+        (
+            pair.control.scenario_kind,
+            str(pair.challenger.variant),
+            pair.outcome_pattern,
+            pair.calls_pattern,
+        )
+        for pair in pairs
     )
 
 
 def session_outcomes(records: Iterable[SessionRecord]) -> Counter[tuple[str, str, str]]:
-    """Count exposed sessions by scenario kind, arm and outcome; smoke runs excluded."""
-    return Counter(
-        (r.scenario_kind, r.variant, r.outcome or "unfinished")
-        for r in records
-        if r.variant is not None and not ship_smoke(r)
-    )
+    """Count a `population` by scenario kind, arm (variant key) and outcome."""
+    return Counter((r.scenario_kind, str(r.variant), str(r.outcome)) for r in records)
 
 
-def _session_table(records: list[SessionRecord]) -> Table:
-    """Session-level counts per scenario kind and arm: outcomes and mean tool calls."""
-    table = Table(title="Exposed sessions by kind and arm (cite these counts)")
-    for column in ("kind", "arm", "sessions", "outcomes", "mean tool calls"):
+def _scope(source: str, since: datetime) -> str:
+    return f"{source} sessions since {since:%Y-%m-%d %H:%M} UTC"
+
+
+def _session_table(exposed: list[SessionRecord], counted: list[SessionRecord], scope: str) -> Table:
+    """Scored sessions per kind and arm: outcomes, mean tool calls, and what was left out."""
+    table = Table(title=f"{scope}: scored exposed sessions by kind and arm (cite these counts)")
+    columns = ("kind", "arm", "sessions", "outcomes", "mean tool calls", "not scored")
+    for column in columns:
         table.add_column(column)
-    outcomes = session_outcomes(records)
+    outcomes = session_outcomes(counted)
     groups: dict[tuple[str, str], list[SessionRecord]] = defaultdict(list)
-    for r in records:
-        if r.variant is not None and not ship_smoke(r):
-            groups[(r.scenario_kind, r.variant)].append(r)
-    for (kind, arm), group in sorted(groups.items()):
+    for r in counted:
+        groups[(r.scenario_kind, str(r.variant))].append(r)
+    kept = {r.session_id for r in counted}
+    left_out = Counter(
+        (r.scenario_kind, str(r.variant)) for r in exposed if r.session_id not in kept
+    )
+    for kind, arm in sorted(groups.keys() | left_out.keys()):
+        group = groups.get((kind, arm), [])
         breakdown = ", ".join(
             f"{outcome} {n}"
             for (k, a, outcome), n in sorted(outcomes.items())
             if (k, a) == (kind, arm)
         )
-        mean = sum(r.tool_call_count for r in group) / len(group)
-        table.add_row(kind, arm, str(len(group)), breakdown, f"{mean:.2f}")
+        mean = f"{sum(r.tool_call_count for r in group) / len(group):.2f}" if group else "-"
+        table.add_row(kind, arm, str(len(group)), breakdown, mean, str(left_out[(kind, arm)]))
     return table
 
 
-def _pattern_table(pairs: list[Pair]) -> Table:
-    """Pair counts per kind, outcome pattern and calls pattern, with each kind's total."""
-    table = Table(title="Pair patterns (every pattern, favourable or not)")
-    for column in ("kind", "outcome pattern", "calls pattern", "pairs", "of kind"):
+def _pattern_table(pairs: list[Pair], scope: str) -> Table:
+    """Pair counts per kind, challenger, outcome and calls pattern, with each group's total."""
+    table = Table(title=f"{scope}: pair patterns (every pattern, favourable or not)")
+    columns = ("kind", "challenger", "outcome pattern", "calls pattern", "pairs", "of group")
+    for column in columns:
         table.add_column(column)
-    totals = Counter(pair.control.scenario_kind for pair in pairs)
-    for (kind, outcome, calls), n in sorted(pattern_counts(pairs).items()):
-        table.add_row(kind, outcome, calls, str(n), str(totals[kind]))
+    totals = Counter((pair.control.scenario_kind, str(pair.challenger.variant)) for pair in pairs)
+    for (kind, variant, outcome, calls), n in sorted(pattern_counts(pairs).items()):
+        table.add_row(kind, variant, outcome, calls, str(n), str(totals[(kind, variant)]))
     return table
 
 
-def _pair_table(cells: dict[Cell, tuple[list[SessionRecord], list[SessionRecord]]]) -> Table:
+def _pair_table(
+    cells: dict[Cell, tuple[list[SessionRecord], list[SessionRecord]]], scope: str
+) -> Table:
     """Every pair, with the cells that lack one arm listed too."""
-    table = Table(title="Candidate pairs (all control x challenger combinations per cell)")
+    table = Table(title=f"{scope}: candidate pairs (every control x challenger per cell)")
     for column in ("source", "scenario", "kind", "model", "control", "challenger", "flag"):
         table.add_column(column)
     for cell, (control, challenger) in cells.items():
@@ -186,7 +222,7 @@ def _pair_table(cells: dict[Cell, tuple[list[SessionRecord], list[SessionRecord]
             table.add_row(
                 *head,
                 _describe(pair.control),
-                _describe(pair.challenger),
+                f"{pair.challenger.variant} {_describe(pair.challenger)}",
                 "OUTCOME DIFFERS" if differs else "",
                 style="bold" if differs else None,
             )
@@ -197,27 +233,59 @@ def _describe(record: SessionRecord) -> str:
     return f"{record.session_id} {record.outcome} {record.tool_call_count} calls"
 
 
-def report(console: Console, records: list[SessionRecord]) -> None:
-    """Print session counts, pair pattern counts and every candidate pair."""
-    cells = by_cell(records)
+def report(console: Console, exposed: list[SessionRecord], source: str, since: datetime) -> None:
+    """Print session counts, pair pattern counts and every candidate pair for one source."""
+    mine = [r for r in exposed if r.source == source and not ship_smoke(r)]
+    counted = population(mine, source)
+    scope = _scope(source, since)
+    cells = by_cell(counted)
     pairs = [pair for c, p in cells.values() for pair in pairs_in(c, p)]
-    console.print(_session_table(records))
-    console.print(_pattern_table(pairs))
-    console.print(_pair_table(cells))
+    console.print(_session_table(mine, counted, scope))
+    console.print(_pattern_table(pairs, scope))
+    console.print(_pair_table(cells, scope))
     console.print(
+        "Counts cover scored sessions (enrolled, finished, not abandoned), as `sa report` "
+        "does; 'not scored' counts the exposed sessions left out.\n"
         "Pairs reuse sessions (each control x challenger combination in a cell), so cite the "
         "session counts above, not pair counts, when describing how typical a replay is.\n"
         "Replay a pair with: uv run python scripts/replay.py --sessions <control> <challenger>"
     )
 
 
+def open_ledger() -> Ledger:
+    """The ledger from settings, opened read-only: the database refuses writes."""
+    return Ledger(make_engine(get_settings(), read_only=True), create_schema=False)
+
+
+def guarded(console: Console, body: Callable[[], int]) -> int:
+    """Run a script body; a missing run state, unreadable ledger or closed input exits 2."""
+    try:
+        return body()
+    except FileNotFoundError as exc:
+        message = f"{exc.filename} not found; has `sa start` run for this slug?"
+    except SQLAlchemyError as exc:
+        message = f"cannot read the ledger: {str(exc).splitlines()[0]}"
+    except EOFError:
+        message = "input ended; stopped"
+    console.print(Text(message, style="red"))
+    return 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Command line entry point for `scripts/find_pairs.py`."""
     parser = argparse.ArgumentParser(description="List replay candidates with honest counts.")
+    parser.add_argument("--source", choices=SOURCES, default="lab", help="traffic source")
+    parser.add_argument("--slug", default=DEFAULT_SLUG, help="experiment whose window to use")
     parser.add_argument("--scenario", help="only this scenario ID")
     parser.add_argument("--model", help="only sessions by this agent label")
     parser.add_argument("--width", type=int, help="console width in columns")
     args = parser.parse_args(argv)
-    ledger = Ledger(make_engine(get_settings(), read_only=True), create_schema=False)
-    report(Console(width=args.width), ledger.exposed_sessions(args.scenario, args.model))
-    return 0
+    console = Console(width=args.width)
+
+    def body() -> int:
+        since = experiment_start(args.slug)
+        exposed = open_ledger().exposed_sessions(args.scenario, args.model, since)
+        report(console, exposed, args.source, since)
+        return 0
+
+    return guarded(console, body)
