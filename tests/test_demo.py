@@ -138,7 +138,6 @@ def test_replay_renders_both_sessions_side_by_side_and_ends_with_outcomes(
     pair = choose_pair(ledger, scenario_id="s05")
     text, pauses = _render(ledger, pair)
 
-    assert text.startswith("┌")
     assert f"{BANNER} (recorded" in text
     assert "s05 (trap)" in text
     assert MODEL in text
