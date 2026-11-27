@@ -109,11 +109,12 @@ include 47 lab sessions and 1 field session; the split by source is below.
 | Informative (`control`) | 23 | 4.435 | 23 of 23 | 0 |
 | Prescriptive | 25 | 3.880 | 23 of 25 | 0 |
 
-By source (ledger): lab control 23 sessions, 100% correct, 4.43 mean calls; lab prescriptive
-24 sessions, 91.7% correct, 3.92 mean calls; field prescriptive 1 session, correct, 3 calls;
-field control none. The two prescriptive sessions that did not complete ended with no booking
-(aligned scenarios `s08` and `s10`, gemini-3.5-flash-lite); no session in either arm made a
-wrong booking, including on traps.
+By source (ledger, report section 6): lab control 23 sessions, 100% correct, 4.43 mean calls;
+lab prescriptive 24 sessions, 91.7% correct, 3.92 mean calls; field prescriptive 1 session,
+correct, 3 calls; field control none. Both prescriptive sessions that did not complete were on
+aligned scenarios (aligned prescriptive 83.3% of 12; trap prescriptive 100% of 13) and on
+gemini-3.5-flash-lite, and ended with no booking (report sections 6 and 7). No session in
+either arm made a wrong booking, including on traps.
 
 Final results: [SA-17 PLACEHOLDER: final exposed counts, means, lift, credible interval and
 win probability from the final Flagsmith results]
@@ -137,8 +138,8 @@ Numbers in its output always come from code, never from the model.
 |---|---|---|---|
 | `sa doctor` | Checks settings, spec, CLI login, environment, warehouse, server SDK key, database, model key and server | no | none |
 | `sa start <spec>` | Plans, then creates or reuses the flag, variant, metrics and experiment, and starts it | yes | **types the slug to approve** |
-| `sa status <slug>` | Enrolment against the stopping rule; names no leader before it is met | no | none |
-| `sa report <slug>` | Refreshes and saves Flagsmith results, reconciles with the ledger, writes the report | no (asks for a results refresh) | reviews the report |
+| `sa status <slug>` | Enrolment against the stopping rule; names no leader before it is met (`--peek` shows inference with a warning and writes the peek to the ledger's `audit_log`) | no | none |
+| `sa report <slug>` | Refreshes and saves Flagsmith results, reconciles with the ledger, writes the report | yes: results refresh request only | reviews the report |
 | `sa propose` | Drafts the next experiment from the ledger's failing sessions | no, writes local files only | edits and commits the draft |
 | `sa ship <slug>` | Applies the pre-registered decision rule, ends the experiment, rolls out the decision, verifies it | yes | **types `ship <slug>` to approve** |
 
@@ -195,16 +196,11 @@ setup, headline from Flagsmith, a reconciliation table (ledger against Flagsmith
 metric: every row matched exactly in the interim report), split health (chi-square), exploratory
 breakdowns by scenario kind, model and source, traffic, limitations and the decision.
 
-`sa propose` (2026-11-26, a draft that stays local) read the failing sessions and proposed
-`error-style-v2`, a challenger that adds `caution_note` to the prescriptive error. Its evidence
-table is computed from the ledger; only the hypothesis text is the model's:
-
-```text
-| Arm | Scenario kind | Offered | Followed |
-|---|---|---|---|
-| prescriptive | aligned | 12 | 3 |
-| prescriptive | trap | 13 | 0 |
-```
+`sa propose` (2026-11-26) read the failing sessions and drafted `error-style-v2`, a challenger
+that adds `caution_note` to the prescriptive error. Its evidence table (per arm and scenario
+kind: how often a corrected call was offered and how often the agent sent it unchanged) is
+computed from the ledger; only the hypothesis text is the model's. The draft stays local and
+uncommitted until a human reviews it, so its figures are not quoted here.
 
 `sa ship error-style-v1 --dry-run` (recorded in the SA-14 pull request, before the stopping
 rule):
@@ -264,7 +260,7 @@ Use the second-audience tools. Call begin_task, complete the task it gives you, 
 Your session joins the live experiment as **field** traffic and is always reported apart from
 lab traffic. **What is logged:** every tool call (name, arguments, response), the client name
 your MCP client reports, and a salted one-way hash of your IP address used only for rate
-limiting (the address itself is never stored or logged). Do not type personal information into
+limiting (the address itself is never stored or logged by the server). Do not type personal information into
 tool arguments. Limits: 10 new sessions per IP per hour, 12 tool calls per session, 10 minutes
 idle timeout. Details: [`docs/deployment.md`](docs/deployment.md).
 
@@ -309,10 +305,13 @@ through it:
 - **The operator saves real work and keeps a human in charge.** One approved command sets up
   a pre-registered experiment; one report replaces manual exports and spreadsheets; one
   approved command ends it and verifies the rollout.
-- **Interim finding (lab, not final):** prescriptive errors used fewer tool calls on average
-  (3.880 against 4.435), and no agent took a suggestion that broke its brief, but two
-  prescriptive sessions on aligned scenarios ended without a booking. Final finding:
-  [SA-17 PLACEHOLDER: final finding in one sentence].
+- **Interim read (lab sessions only, not a finding):** mean tool calls were 3.92 in the
+  prescriptive arm (24 sessions) against 4.43 in control (23), and no session made a wrong
+  booking, including on traps. The lower prescriptive mean is not a win: it includes the two
+  prescriptive sessions that ended without a booking, and a session that gives up early uses
+  few calls (the confound `HYPOTHESIS.md` section 14 names). There is no inference from
+  Flagsmith yet and the stopping rule is not met. Final finding: [SA-17 PLACEHOLDER: final
+  finding in one sentence].
 
 ## Creativity
 
@@ -431,31 +430,53 @@ PowerShell from the repository root.
 git clone https://github.com/Ishaan2053/second-audience.git
 cd second-audience
 uv sync
-uv run pytest                  # without credentials, network tests skip
+uv run pytest -m "not network"   # the offline suite, as CI runs it
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
 ```
 
-**Run the reference server offline.** Without `FLAGSMITH_ENVIRONMENT_KEY`, every session gets
-the control style outside any experiment, and the ledger is a local SQLite file (`sa.db`).
+**Run the reference server offline.** `Settings` loads `.env` from the current directory
+automatically, every time. Real environment variables override it, but an empty one does not
+(empty values are ignored and the `.env` value is used). So a checkout with a production `.env`
+is never offline: the server would enrol sessions in the live experiment and write to the
+production ledger, and `scripts/smoke.py` would target `SA_SERVER_URL` by default.
+
+> **Warning.** Never run `scripts/smoke.py` or the lab runner against the production server or
+> with production credentials while an experiment is running. Smoke sessions are scripted:
+> they send the offered `corrected_call` unchanged, so prescriptive sessions end with wrong
+> bookings on traps, and those sessions would be counted in the live experiment and the ledger.
+
+Run offline from a separate clone that has no `.env`, in a shell with no `FLAGSMITH_*`, `SA_*`
+or `GEMINI_*` variables set. Without `FLAGSMITH_ENVIRONMENT_KEY`, every session gets the
+control style outside any experiment. Terminal 1, the server:
 
 ```powershell
+git clone https://github.com/Ishaan2053/second-audience.git sa-offline
+cd sa-offline
+Test-Path .env                                                   # must print False
+Get-ChildItem env: | Where-Object Name -Match '^(FLAGSMITH_|SA_|GEMINI_)'   # must print nothing
+uv sync
+$env:SA_DATABASE_URL = "sqlite:///./sa-offline.db"   # local ledger file in this clone
+$env:SA_LAB_KEY = "local-dev-key"                    # any local value; set before the server starts
 uv run python -m second_audience.booking.server --transport http --port 8000   # MCP at /mcp
-uv run python -m second_audience.booking.server --transport stdio
 ```
 
-In a second terminal, scripted sessions with no model. Without `SA_LAB_KEY` they count as
-field sessions, which are rate-limited to 10 per IP per hour; set any local value (the same in
-both terminals) to send them as lab traffic:
+For stdio instead of HTTP: `uv run python -m second_audience.booking.server --transport stdio`.
+
+Terminal 2, scripted sessions with no model, in the same clone and with the same two values.
+`SA_LAB_KEY` sends them as lab traffic; without it they count as field sessions, which are
+rate-limited to 10 per IP per hour. Pass the local URL explicitly:
 
 ```powershell
-$env:SA_LAB_KEY = "local-dev-key"   # also set in the server's terminal before starting it
-uv run python scripts/smoke.py --sessions 24
+cd sa-offline
+$env:SA_DATABASE_URL = "sqlite:///./sa-offline.db"
+$env:SA_LAB_KEY = "local-dev-key"
+uv run python scripts/smoke.py --url http://127.0.0.1:8000/mcp --sessions 24
 ```
 
 **With credentials** (copy `.env.example` to `.env` and fill it in; Flagsmith CLI v2 logged
-in for the operator):
+in for the operator). These commands read the configured Flagsmith environment and ledger:
 
 ```powershell
 uv run sa doctor                                         # needs credentials and a running server
@@ -485,7 +506,7 @@ lists every variable. With `SA_ENV=prod`, `FLAGSMITH_ENVIRONMENT_KEY`, `SA_DATAB
 | `GEMINI_API_KEY` | none | lab, operator | model access |
 | `SA_LAB_MODELS` | empty | lab | comma-separated Gemini model IDs |
 | `SA_LAB_KEY` | none | server, lab, operator, smoke | shared secret marking lab sessions; also salts IP hashes |
-| `SA_SERVER_URL` | none | lab, operator | MCP endpoint the runner, `sa doctor` and `sa ship` use |
+| `SA_SERVER_URL` | none | lab, operator, smoke | MCP endpoint the runner, `sa doctor`, `sa ship` and `scripts/smoke.py` (default target) use |
 | `SA_LAB_REQUESTS_PER_MINUTE` | `8` | lab | pacing per model |
 | `SA_LAB_REQUESTS_PER_DAY` | `400` | lab | per-model daily budget before parking |
 | `SA_LAB_CONCURRENCY` | `1` | lab | sessions at once, 1 to 3 |
@@ -500,10 +521,21 @@ lists every variable. With `SA_ENV=prod`, `FLAGSMITH_ENVIRONMENT_KEY`, `SA_DATAB
 
 ### Tests
 
-`uv run pytest` runs the whole suite. Tests marked `network` need Flagsmith, Gemini or the
-Postgres ledger and skip without credentials; CI runs `uv run pytest -m "not network"`. One
-file: `uv run pytest tests/test_booking_world.py`. With credentials, network tests create
-temporary `sa_test_*` schemas in the configured Postgres and drop them afterwards.
+`uv run pytest -m "not network"` runs every test that needs no credentials; CI runs exactly
+this. One file: `uv run pytest tests/test_booking_world.py`.
+
+`uv run pytest` with no marker also runs the tests marked `network`, which skip without
+credentials. With credentials they make real changes outside this repository:
+
+- they create a temporary `sa_test_*` feature in the Flagsmith project through the `flagsmith`
+  CLI (which must be logged in), add a variant in the Development environment, and delete the
+  feature afterwards. They resolve it with `FLAGSMITH_ENVIRONMENT_KEY`, which must therefore be
+  a **Development** environment key;
+- they create temporary `sa_test_*` schemas in the Postgres at `SA_DATABASE_URL` and drop them
+  afterwards;
+- they drive one real Gemini session per model in `SA_LAB_MODELS`, using quota.
+
+While an experiment is running, use `uv run pytest -m "not network"`.
 
 ## Limitations
 
@@ -515,8 +547,9 @@ temporary `sa_test_*` schemas in the configured Postgres and drop them afterward
   suggestions are wrong. The lab prompt asks agents to book directly, which raises exposure.
 - **Sample size and intervals.** At the pre-registered 75 exposed sessions per arm, only large
   effects can reach a 0.95 win probability; a null result means "no large effect found". The
-  interim read has 23 and 25 exposed sessions, and Flagsmith returns no inference below 50
-  identities per arm, so the interim report shows no lift or interval. Guardrails with few
+  interim read has 23 and 25 exposed sessions, and Flagsmith returns no inference for a metric
+  until each arm has at least 50 identities and 5 conversions, so the interim report shows no
+  lift or interval. Guardrails with few
   events may be reported from ledger counts only (`HYPOTHESIS.md` section 10).
 - **Per-session identity.** Each session is a new Flagsmith identity, so the same agent can
   land in both arms across sessions. Sessions are the unit of analysis, not agents or users.
