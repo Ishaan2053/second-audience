@@ -45,7 +45,9 @@ second-audience/
   experiments/error-style-v1.yaml
   experiments/.state/           IDs and start record written once by `sa start`
   experiments/proposals/        `sa propose` drafts (local, not committed)
-  reports/<slug>/               report.md and saved results JSON from `sa report`
+  reports/<slug>/               report.md and saved results JSON from `sa report`;
+                                manual.yaml (values copied from the dashboard where the API returns no
+                                inference); decision.md written by `sa ship`
   docs/                         plans, architecture, RESULTS.md, deployment, tickets
   src/second_audience/
     config.py                   Settings (pydantic-settings)
