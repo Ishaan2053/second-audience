@@ -41,10 +41,12 @@ flowchart LR
 second-audience/
   CLAUDE.md  AGENTS.md  README.md  HYPOTHESIS.md  LICENSE
   pyproject.toml  uv.lock  .env.example  Dockerfile  .dockerignore  render.yaml
-  .github/workflows/ci.yml  keepalive.yml
+  .github/workflows/ci.yml  keepalive.yml  ISSUE_TEMPLATE/  pull_request_template.md
   experiments/error-style-v1.yaml
-  reports/                      generated reports and saved results JSON
-  docs/
+  experiments/.state/           IDs and start record written once by `sa start`
+  experiments/proposals/        `sa propose` drafts (local, not committed)
+  reports/<slug>/               report.md and saved results JSON from `sa report`
+  docs/                         plans, architecture, RESULTS.md, deployment, tickets
   src/second_audience/
     config.py                   Settings (pydantic-settings)
     core/
@@ -58,16 +60,29 @@ second-audience/
       errors.py                 state-dependent errors and rendering
       suggestions.py            suggestion heuristic
       sessions.py               session lifecycle and budgets
-      server.py                 FastMCP app and tools
+      limits.py                 field limits: kill switch, session cap, per-IP rate
+      health.py                 /healthz checks
+      landing.html              public landing page at /
+      server.py                 FastMCP app, tools and routes
     lab/
       models.py                 ModelClient protocol, Gemini implementation
       plan.py                   run matrix
-      runner.py                 agent loop, pacing, resume
+      runner.py                 agent loop, pacing, resume; `python -m second_audience.lab.runner`
     operator/
       cli.py                    Typer app: sa
+      doctor.py                 `sa doctor` checks
       flagsmith_admin.py        CLI and Admin API wrapper
       spec.py                   experiment spec model
-      report.py  propose.py  ship.py  gemini.py
+      start.py                  `sa start` plan and apply
+      repo.py                   git checks (committed spec, approver name)
+      results.py                typed Flagsmith results, saved files, manual.yaml
+      stats.py                  Wilson interval, chi-square, stopping rule
+      analysis.py               every report number and the decision
+      narrative.py              report prose (model draft, number-checked, or template)
+      report.py                 Markdown report and status lines
+      propose.py                `sa propose` evidence, validation and drafts
+      ship.py                   `sa ship` plan, completion, read-back and smoke
+      gemini.py                 Gemini client for the operator
     demo/
       pairs.py                  replay candidates and pattern counts (scripts/find_pairs.py)
       replay.py                 side-by-side transcript replay (scripts/replay.py)
@@ -79,21 +94,23 @@ second-audience/
 
 ### 3.1 Configuration (`config.py`)
 
-One `Settings` class, validated at start-up. Missing required values fail fast with a clear message.
+One `Settings` class, validated at start-up. Missing required values fail fast with a clear
+message. With `SA_ENV=prod`, `FLAGSMITH_ENVIRONMENT_KEY`, `SA_DATABASE_URL` and `SA_LAB_KEY`
+must be set explicitly.
 
 | Variable | Used by | Purpose |
 |---|---|---|
 | `SA_ENV` | all | `dev`, `test` or `prod` |
-| `FLAGSMITH_ENVIRONMENT_KEY` | server | SDK key for the Flagsmith environment |
+| `FLAGSMITH_ENVIRONMENT_KEY` | server, operator | SDK key for the Flagsmith environment; `sa doctor` checks it belongs to the spec's environment |
 | `FLAGSMITH_API_URL` | server | optional override |
 | `FLAGSMITH_REQUEST_TIMEOUT_SECONDS` | server | per-request timeout, default 2; one retry, then the control style |
 | `SA_FLAG_NAME` | server, operator | default `error_style`; `sa doctor` checks the spec uses it |
 | `SA_FLAGSMITH_PROJECT` | operator | Flagsmith project the CLI manages; default `second-audience` |
-| `SA_DATABASE_URL` | server, operator, lab | ledger; default `sqlite:///./sa.db`; Postgres as `postgresql+psycopg://...` |
+| `SA_DATABASE_URL` | server, operator, lab, demo | ledger; default `sqlite:///./sa.db`; Postgres as `postgresql+psycopg://...` |
 | `GEMINI_API_KEY` | lab, operator | model access |
 | `SA_LAB_MODELS` | lab | comma-separated model IDs |
-| `SA_LAB_KEY` | server, lab | shared secret marking lab sessions |
-| `SA_SERVER_URL` | lab | MCP endpoint the runner targets |
+| `SA_LAB_KEY` | server, lab, operator | shared secret marking lab sessions (also `sa ship`'s smoke session and the IP-hash salt) |
+| `SA_SERVER_URL` | lab, operator | MCP endpoint the runner targets; `sa doctor` probes it and `sa ship` smoke-tests it |
 | `SA_LAB_REQUESTS_PER_MINUTE` | lab | pacing per model, default 8 |
 | `SA_LAB_REQUESTS_PER_DAY` | lab | per-model daily budget before parking, default 400 |
 | `SA_LAB_CONCURRENCY` | lab | sessions at once, 1 to 3, default 1 |
@@ -225,8 +242,8 @@ Details fixed in SA-04 (`booking/suggestions.py`):
 Twelve scenarios, each built so the obvious first attempt hits a styled error.
 
 - **Aligned (7):** the heuristic's suggestion satisfies the brief.
-- **Trap (5):** the suggestion violates the brief (ends after a stated deadline, lacks a
-  required feature, or is too small).
+- **Trap (5):** the suggestion violates the brief (ends after a stated deadline, starts
+  before the earliest allowed time, or lacks a required feature).
 
 A scenario defines: `id`, `kind`, `brief`, seed bookings, and constraints (date, allowed
 time window, duration, attendees, required features). It also records `first_attempt`, the
@@ -433,7 +450,9 @@ The shot list is `docs/demo-script.md`.
 
 ### 3.7 Lab runner (`lab/`)
 
-For each planned run (model x scenario x replicate), the runner opens an MCP client
+Command: `uv run python -m second_audience.lab.runner plan --replicates N [--seed S]`, then
+`run [--concurrency 1|2|3]`, and `status`. For each planned run (model x scenario x
+replicate), the runner opens an MCP client
 connection to `SA_SERVER_URL`, calls `begin_task` itself, hands the brief and tool list to
 the model, and loops on function calls until the model stops or a turn limit is reached.
 It then calls `finish_task` if the model did not.
@@ -639,6 +658,7 @@ style) and a host should not restart it for that. `GET /` is the static page
 | Project | `second-audience` |
 | Environments | `development` (smoke and pilot), `production` (the reported experiment) |
 | Warehouse | Flagsmith managed warehouse, enabled on both environments |
+| Experiment | `error-style-v1`, ID 680 on `production`, started 2026-11-26 15:29:45 UTC (`experiments/.state/error-style-v1.json`) |
 | Flag | `error_style`, multivariate; control value = informative JSON; variant key `prescriptive` |
 | Metrics | `task_finished` (mean of the value, down; expected direction `decrease`, primary); `task_completed` (occurrence, up; expected direction `not_decrease`, guardrail); `task_wrong_booking` (occurrence, down; expected direction `not_increase`, guardrail). Efficiency became primary in SA-09 because completion was at its ceiling in the pilot (`HYPOTHESIS.md`) |
 | Split | 100% of exposed sessions, 50/50 |
@@ -664,7 +684,7 @@ sequenceDiagram
     A->>S: further calls
     A->>S: finish_task
     S->>S: checker scores final state
-    S->>E: track(task_completed) if correct, track(task_finished, calls)
+    S->>E: track(task_completed or task_wrong_booking), track(task_finished, calls)
     E->>F: event
     S->>L: outcome
 ```
@@ -683,7 +703,8 @@ sequenceDiagram
 
 ## 7. Observability and error handling
 
-- Structured logs (JSON lines) with `session_id` on every server log line.
+- Plain-text logs (time, level, logger, message); session lines name the `session_id`.
+  Uvicorn's access log is off, so client addresses are never logged.
 - The server never raises raw exceptions to clients. Unknown errors return FastMCP's masked
   tool error (`mask_error_details=True`), with no exception detail, and are logged with a
   traceback.
