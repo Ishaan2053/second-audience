@@ -140,7 +140,7 @@ Numbers in its output always come from code, never from the model.
 | `sa start <spec>` | Plans, then creates or reuses the flag, variant, metrics and experiment, and starts it | yes | **types the slug to approve** |
 | `sa status <slug>` | Enrolment against the stopping rule; names no leader before it is met (`--peek` shows inference with a warning and writes the peek to the ledger's `audit_log`) | no | none |
 | `sa report <slug>` | Refreshes and saves Flagsmith results, reconciles with the ledger, writes the report | yes: results refresh request only | reviews the report |
-| `sa propose` | Drafts the next experiment from the ledger's failing sessions | no, writes local files only | edits and commits the draft |
+| `sa propose` | Drafts the next experiment from the ledger's failing sessions | no, writes local files only | edits the draft spec, moves it to `experiments/<slug>.yaml`, adds it to `HYPOTHESIS.md`, commits both |
 | `sa ship <slug>` | Applies the pre-registered decision rule, ends the experiment, rolls out the decision, verifies it | yes | **types `ship <slug>` to approve** |
 
 Real output excerpts (Production, experiment 680):
@@ -306,8 +306,8 @@ through it:
   a pre-registered experiment; one report replaces manual exports and spreadsheets; one
   approved command ends it and verifies the rollout.
 - **Interim read (lab sessions only, not a finding):** mean tool calls were 3.92 in the
-  prescriptive arm (24 sessions) against 4.43 in control (23), and no session made a wrong
-  booking, including on traps. The lower prescriptive mean is not a win: it includes the two
+  prescriptive arm (24 sessions) against 4.43 in control (23), and no exposed session made a
+  wrong booking, including on traps. The lower prescriptive mean is not a win: it includes the two
   prescriptive sessions that ended without a booking, and a session that gives up early uses
   few calls (the confound `HYPOTHESIS.md` section 14 names). There is no inference from
   Flagsmith yet and the stopping rule is not met. Final finding: [SA-17 PLACEHOLDER: final
@@ -448,10 +448,14 @@ production ledger, and `scripts/smoke.py` would target `SA_SERVER_URL` by defaul
 > bookings on traps, and those sessions would be counted in the live experiment and the ledger.
 
 Run offline from a separate clone that has no `.env`, in a shell with no `FLAGSMITH_*`, `SA_*`
-or `GEMINI_*` variables set. Without `FLAGSMITH_ENVIRONMENT_KEY`, every session gets the
+or `GEMINI_*` variables set. Make that clone next to the first one, not inside it (`cd ..`
+first), so it is a separate working tree. Stop any local lab server first, and use a port
+other than 8000 (below, 8765): a configured server on 8000 would answer the smoke sessions
+instead. Without `FLAGSMITH_ENVIRONMENT_KEY`, every session gets the
 control style outside any experiment. Terminal 1, the server:
 
 ```powershell
+cd ..                                                            # out of the first clone
 git clone https://github.com/Ishaan2053/second-audience.git sa-offline
 cd sa-offline
 Test-Path .env                                                   # must print False
@@ -459,20 +463,24 @@ Get-ChildItem env: | Where-Object Name -Match '^(FLAGSMITH_|SA_|GEMINI_)'   # mu
 uv sync
 $env:SA_DATABASE_URL = "sqlite:///./sa-offline.db"   # local ledger file in this clone
 $env:SA_LAB_KEY = "local-dev-key"                    # any local value; set before the server starts
-uv run python -m second_audience.booking.server --transport http --port 8000   # MCP at /mcp
+uv run python -m second_audience.booking.server --transport http --port 8765   # MCP at /mcp
 ```
 
 For stdio instead of HTTP: `uv run python -m second_audience.booking.server --transport stdio`.
 
 Terminal 2, scripted sessions with no model, in the same clone and with the same two values.
 `SA_LAB_KEY` sends them as lab traffic; without it they count as field sessions, which are
-rate-limited to 10 per IP per hour. Pass the local URL explicitly:
+rate-limited to 10 per IP per hour. First confirm that port 8765 is the offline server:
+`/healthz` reports `checks.flagsmith` as `null` (not configured) only when the server has no
+`FLAGSMITH_ENVIRONMENT_KEY`. Then pass the local URL explicitly:
 
 ```powershell
-cd sa-offline
+cd sa-offline                                                    # the offline clone, as in terminal 1
+$health = Invoke-RestMethod http://127.0.0.1:8765/healthz
+if ($null -ne $health.checks.flagsmith) { throw "port 8765 is not the offline server: Flagsmith is configured" }
 $env:SA_DATABASE_URL = "sqlite:///./sa-offline.db"
 $env:SA_LAB_KEY = "local-dev-key"
-uv run python scripts/smoke.py --url http://127.0.0.1:8000/mcp --sessions 24
+uv run python scripts/smoke.py --url http://127.0.0.1:8765/mcp --sessions 24
 ```
 
 **With credentials** (copy `.env.example` to `.env` and fill it in; Flagsmith CLI v2 logged

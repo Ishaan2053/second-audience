@@ -9,7 +9,8 @@
 [`reports/error-style-v1/results-20261126T180211Z.json`](../reports/error-style-v1/results-20261126T180211Z.json);
 report generated 2026-11-26 18:02:19 UTC. A read-only `sa status` at 2026-11-27 12:29 UTC
 showed the live ledger with the same exposed counts (control 23, prescriptive 25), so no
-sessions arrived between the two.
+exposed sessions arrived between the two. The report counts 91 sessions in total (field 1,
+lab 90; report section 7).
 
 **Final data cut-off:** [SA-17 PLACEHOLDER: Flagsmith `as_of` of the final results and the
 saved results file name]
@@ -147,7 +148,7 @@ What these interim numbers show, and what they do not:
 - **The two failures are both prescriptive, on aligned scenarios.** Aligned prescriptive is
   83.3% of 12 and every other cell by kind is 100%, which is why the prescriptive completion
   rate is 23 of 25. Both are gemini-3.5-flash-lite sessions (87.5% of 16) and ended with no
-  booking: they are not wrong bookings, and section 7 shows no `budget_exhausted` session.
+  booking: they are not wrong bookings, and report section 7 shows no `budget_exhausted` session.
 - **Fewer calls in the prescriptive arm so far, which is not a win.** Flagsmith's means are
   3.880 against 4.435 per session (lab only: 3.92 against 4.43), lower mostly on aligned
   scenarios (3.25 against 4.29). The prescriptive mean includes the two sessions that ended
