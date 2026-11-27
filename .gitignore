@@ -18,8 +18,10 @@ dist/
 .coverage
 htmlcov/
 
-# `sa propose` drafts (local until reviewed) and rejected answers kept for inspection
-experiments/proposals/
+# `sa propose` decision notes and rejected answers kept for inspection. The .yaml drafts stay
+# visible to git status, so `sa start` refuses one that is not committed.
+experiments/proposals/*.md
+experiments/proposals/.failed/
 
 # Local ledger databases
 *.db

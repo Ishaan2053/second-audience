@@ -44,7 +44,8 @@ second-audience/
   .github/workflows/ci.yml  keepalive.yml  ISSUE_TEMPLATE/  pull_request_template.md
   experiments/error-style-v1.yaml
   experiments/.state/           IDs and start record written once by `sa start`
-  experiments/proposals/        `sa propose` drafts (local, not committed)
+  experiments/proposals/        `sa propose` drafts, not committed (.md and .failed/ git-ignored;
+                                .yaml stays visible so `sa start` refuses it uncommitted)
   reports/<slug>/               report.md and saved results JSON from `sa report`;
                                 manual.yaml (values copied from the dashboard where the API returns no
                                 inference); decision.md written by `sa ship`
