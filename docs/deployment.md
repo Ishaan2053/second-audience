@@ -59,9 +59,9 @@ against a monthly allowance shown in the dashboard.
 - Render's health check calls `/healthz`. It answers 200 even when Flagsmith or the
   database check fails (`status: degraded`), so Render does not restart the server for a
   dependency outage.
-- Lab runs stay local: `uv run sa lab ...` drives a local server, which writes to the same
-  Postgres and the same Flagsmith environment. Do not point `SA_SERVER_URL` at the public
-  host for lab runs.
+- Lab runs stay local: `uv run python -m second_audience.lab.runner run` drives a local
+  server, which writes to the same Postgres and the same Flagsmith environment. Do not point
+  `SA_SERVER_URL` at the public host for lab runs.
 
 ## 3. Environment variables on the host
 
