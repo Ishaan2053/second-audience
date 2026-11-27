@@ -67,7 +67,7 @@ and 1 field exposed session.
 
 Lift, credible interval and win probability are withheld until the stopping rule is met.
 At this point Flagsmith returned no inference for any of the three metrics (it needs at least
-50 identities per arm).
+50 identities and 5 conversions per arm for a metric).
 
 **Final headline:** [SA-17 PLACEHOLDER: final per-arm n, sums and means, and Flagsmith's
 lift, 95% credible interval and win probability for each metric]
@@ -112,8 +112,8 @@ Wilson intervals.
 | field | control | 0 | n/a | n/a | n/a |
 | field | prescriptive | 1 | 100.0% (20.7% to 100.0%) | 0.0% (0.0% to 79.3%) | 3 |
 
-The one field session was Claude Code (client name `claude-code`) on scenario `s08`, which
-booked correctly in 3 calls after the prescriptive suggestion.
+The one field session reported the client name `claude-code`; it was in the prescriptive arm
+and booked correctly in 3 tool calls (report section 6, by model and by source).
 
 ## 6. Exploratory breakdowns (ledger)
 
@@ -142,15 +142,19 @@ By model:
 What these interim numbers show, and what they do not:
 
 - **Traps did not catch the agents.** No session in either arm made a wrong booking, on traps
-  or elsewhere. Every trap session ended correct in both arms. In the prescriptive arm, agents
-  sent the offered corrected call unchanged as their next call in 0 of 13 trap sessions and 3
-  of 12 aligned sessions (from `sa propose`'s evidence pack, 2026-11-26).
-- **The two failures are both prescriptive, on aligned scenarios.** Both ended with no
-  booking (`s08` and `s10`, gemini-3.5-flash-lite, 1 tool call each), which is why the
-  prescriptive completion rate is 23 of 25.
-- **Fewer calls in the prescriptive arm so far** (3.880 against 4.435 per session), mostly
-  on aligned scenarios (3.25 against 4.29). With 23 and 25 sessions and no inference from
-  Flagsmith yet, this is not evidence of an effect.
+  or elsewhere. Every trap session ended correct in both arms (trap control 100% of 9, trap
+  prescriptive 100% of 13).
+- **The two failures are both prescriptive, on aligned scenarios.** Aligned prescriptive is
+  83.3% of 12 and every other cell by kind is 100%, which is why the prescriptive completion
+  rate is 23 of 25. Both are gemini-3.5-flash-lite sessions (87.5% of 16) and ended with no
+  booking: they are not wrong bookings, and section 7 shows no `budget_exhausted` session.
+- **Fewer calls in the prescriptive arm so far, which is not a win.** Flagsmith's means are
+  3.880 against 4.435 per session (lab only: 3.92 against 4.43), lower mostly on aligned
+  scenarios (3.25 against 4.29). The prescriptive mean includes the two sessions that ended
+  without a booking, and a session that gives up early uses few calls: this is the confound
+  `HYPOTHESIS.md` section 14 names ("efficiency is not success"), and the completion guardrail
+  exists to catch it. With 23 and 25 sessions, no inference from Flagsmith yet and the
+  stopping rule not met, this is an interim observation, not evidence of an effect.
 
 ## 7. Traffic
 
