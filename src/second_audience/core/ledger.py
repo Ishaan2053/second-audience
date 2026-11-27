@@ -19,6 +19,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     Column,
+    ColumnElement,
     Connection,
     DateTime,
     Dialect,
@@ -32,6 +33,7 @@ from sqlalchemy import (
     TypeDecorator,
     UniqueConstraint,
     create_engine,
+    event,
     func,
     insert,
     make_url,
@@ -255,12 +257,27 @@ class SessionRecord:
     tool_call_count: int
 
 
-def make_engine(settings: Settings) -> Engine:
-    """Create the ledger engine from `SA_DATABASE_URL`; Postgres connections are pre-pinged."""
+def make_engine(settings: Settings, *, read_only: bool = False) -> Engine:
+    """Create the ledger engine from `SA_DATABASE_URL`; Postgres connections are pre-pinged.
+
+    With `read_only`, the database itself refuses writes: Postgres transactions are opened
+    READ ONLY and SQLite connections run with `PRAGMA query_only`.
+    """
     url = make_url(settings.sa_database_url.get_secret_value())
     if url.get_backend_name() == "postgresql":
-        return create_engine(url, pool_pre_ping=True)
-    return create_engine(url)
+        options = {"postgresql_readonly": True} if read_only else {}
+        return create_engine(url, pool_pre_ping=True, execution_options=options)
+    engine = create_engine(url)
+    if read_only:
+        event.listen(engine, "connect", _sqlite_query_only)
+    return engine
+
+
+def _sqlite_query_only(dbapi_connection: Any, _record: Any) -> None:
+    """Make a new SQLite connection refuse every write."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA query_only = ON")
+    cursor.close()
 
 
 def _now() -> datetime:
@@ -285,10 +302,11 @@ def _bounded_result(result: Any) -> tuple[Any, bool]:
 class Ledger:
     """Writes and reads the ledger tables. Creates the schema if it does not exist."""
 
-    def __init__(self, engine: Engine) -> None:
-        """Bind to an engine and create any missing tables."""
+    def __init__(self, engine: Engine, *, create_schema: bool = True) -> None:
+        """Bind to an engine and, unless told not to, create any missing tables."""
         self._engine = engine
-        metadata.create_all(engine)
+        if create_schema:
+            metadata.create_all(engine)
 
     def ping(self) -> bool:
         """Run a trivial query; raises if the database cannot be reached."""
@@ -613,10 +631,36 @@ class Ledger:
 
     def sessions_since(self, since: datetime) -> list[SessionRecord]:
         """Every session started at or after `since`, oldest first."""
+        return self._session_records(sessions.c.started_at >= since)
+
+    def sessions_by_id(self, session_ids: Iterable[str]) -> list[SessionRecord]:
+        """The full rows of the given sessions, oldest first; unknown IDs are absent."""
+        ids = list(session_ids)
+        if not ids:
+            return []
+        return self._session_records(sessions.c.session_id.in_(ids))
+
+    def exposed_sessions(
+        self, scenario_id: str | None = None, agent_label: str | None = None
+    ) -> list[SessionRecord]:
+        """Finished sessions exposed to an arm, oldest first, optionally narrowed."""
+        conditions: list[ColumnElement[bool]] = [
+            sessions.c.exposed_at.is_not(None),
+            sessions.c.variant.is_not(None),
+            sessions.c.finished_at.is_not(None),
+        ]
+        if scenario_id is not None:
+            conditions.append(sessions.c.scenario_id == scenario_id)
+        if agent_label is not None:
+            conditions.append(sessions.c.agent_label == agent_label)
+        return self._session_records(*conditions)
+
+    def _session_records(self, *conditions: ColumnElement[bool]) -> list[SessionRecord]:
+        """Session rows matching every condition, oldest first."""
         with self._engine.connect() as conn:
             rows = conn.execute(
                 select(sessions)
-                .where(sessions.c.started_at >= since)
+                .where(*conditions)
                 .order_by(sessions.c.started_at, sessions.c.session_id)
             ).all()
         return [
