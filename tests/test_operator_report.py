@@ -683,11 +683,14 @@ def _entry(at: datetime, action: str, slug: str | None, detail: str = "{}") -> A
     return AuditEntry(at=at, action=action, experiment_slug=slug, detail=detail, approved_by="dev")
 
 
-def _event(created: str, log: str) -> str:
-    return json.dumps({"created_date": created, "log": log})
+def _event(created: str, log: str, environment: str | None = None) -> str:
+    event: dict[str, Any] = {"created_date": created, "log": log}
+    if environment is not None:
+        event["environment"] = {"id": 1, "name": environment}
+    return json.dumps(event)
 
 
-def test_audit_trail_pairs_each_flag_change_with_the_nearest_event() -> None:
+def test_audit_trail_pairs_each_flag_change_with_the_nearest_event(spec: ExperimentSpec) -> None:
     entries = [
         _entry(STARTED, "start", SLUG),
         _entry(
@@ -698,7 +701,7 @@ def test_audit_trail_pairs_each_flag_change_with_the_nearest_event() -> None:
         _entry(NOW, "ship", SLUG),
         _entry(NOW, "ship", "another-slug"),
     ]
-    lines = audit_trail(entries, SLUG)
+    lines = audit_trail(entries, spec)
     assert lines[0] == "## Independent audit trail"
     table = [line for line in lines if line.startswith("| start") or line.startswith("| ship")]
     assert table == [
@@ -709,11 +712,50 @@ def test_audit_trail_pairs_each_flag_change_with_the_nearest_event() -> None:
     assert not any("Flagsmith audit events have been received" in line for line in lines)
 
 
-def test_audit_trail_says_when_no_webhook_events_arrived() -> None:
-    lines = audit_trail([_entry(STARTED, "start", SLUG)], SLUG)
+def test_audit_trail_ignores_other_environments_and_features(spec: ExperimentSpec) -> None:
+    entries = [
+        _entry(STARTED, "start", SLUG),
+        _entry(NOW, "ship_per_model", SLUG),
+        _entry(
+            STARTED,
+            FLAGSMITH_AUDIT,
+            None,
+            _event("2026-11-26T15:00:05Z", "Segment created", "Development"),
+        ),
+        _entry(
+            STARTED,
+            FLAGSMITH_AUDIT,
+            None,
+            _event(
+                "2026-11-26T15:00:10Z",
+                "Flag state / Remote Config value updated for feature: field_enabled",
+                "Production",
+            ),
+        ),
+        _entry(
+            NOW,
+            FLAGSMITH_AUDIT,
+            None,
+            _event(
+                "2026-11-27T06:00:30Z",
+                f"Flag state / Remote Config value updated for feature: {spec.flag}",
+                "Production",
+            ),
+        ),
+    ]
+    rows = [line for line in audit_trail(entries, spec) if line.startswith(("| start", "| ship"))]
+    assert rows == [
+        "| start | 2026-11-26 15:00:00 UTC | dev | no matching event | n/a | n/a |",
+        "| ship_per_model | 2026-11-27 06:00:00 UTC | dev | Flag state / Remote Config value "
+        f"updated for feature: {spec.flag} | 2026-11-27 06:00:30 UTC | +30 |",
+    ]
+
+
+def test_audit_trail_says_when_no_webhook_events_arrived(spec: ExperimentSpec) -> None:
+    lines = audit_trail([_entry(STARTED, "start", SLUG)], spec)
     assert "| start | 2026-11-26 15:00:00 UTC | dev | no matching event | n/a | n/a |" in lines
     assert lines[-1].startswith("No Flagsmith audit events have been received")
-    assert audit_trail([], SLUG)[-1].startswith("No operator action")
+    assert audit_trail([], spec)[-1].startswith("No operator action")
 
 
 def test_report_includes_the_independent_audit_trail(

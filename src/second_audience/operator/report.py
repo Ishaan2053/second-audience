@@ -6,6 +6,7 @@ The only model-written text is the prose of sections 1 and 9, and the report say
 
 import contextlib
 import json
+import re
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,9 +21,10 @@ from second_audience.operator.analysis import (
     in_experiment,
 )
 from second_audience.operator.narrative import Written
+from second_audience.operator.spec import ExperimentSpec
 from second_audience.operator.stats import SRM_ALPHA, Interval
 
-FLAG_CHANGING_ACTIONS = ("start", "ship", "ship_attempt")
+FLAG_CHANGING_ACTIONS = ("start", "ship", "ship_attempt", "ship_per_model")
 """Operator audit actions that change Flagsmith, so Flagsmith's own audit log should echo them."""
 
 AUDIT_MATCH_WINDOW = timedelta(minutes=10)
@@ -319,8 +321,16 @@ def _decision(a: Analysis, written: Written) -> list[str]:
     return lines
 
 
-def _flagsmith_event(entry: AuditEntry) -> tuple[datetime, str]:
-    """A stored webhook event's own time (else when it arrived) and its log line, cell-safe."""
+FEATURE_IN_LOG = re.compile(r"for feature: (\S+)")
+"""How Flagsmith's audit log text names the feature an event changed."""
+
+
+def _flagsmith_event(entry: AuditEntry) -> tuple[datetime, str, str | None, str | None]:
+    """A stored webhook event's time (else arrival), log line (cell-safe), environment, feature.
+
+    The environment is the event's environment name, lower-cased; the feature is the name its
+    log text mentions. Either is None when the event does not say.
+    """
     try:
         detail = json.loads(entry.detail)
     except json.JSONDecodeError:
@@ -335,23 +345,44 @@ def _flagsmith_event(entry: AuditEntry) -> tuple[datetime, str]:
         at = at.replace(tzinfo=UTC)
     log = detail.get("log")
     text = " ".join(log.split())[:120] if isinstance(log, str) else "(no log text)"
-    return at, text.replace("|", "/").replace("`", "'")
+    environment = detail.get("environment")
+    name = environment.get("name") if isinstance(environment, dict) else None
+    feature = FEATURE_IN_LOG.search(log) if isinstance(log, str) else None
+    return (
+        at,
+        text.replace("|", "/").replace("`", "'"),
+        name.lower() if isinstance(name, str) else None,
+        feature.group(1) if feature else None,
+    )
 
 
-def audit_trail(entries: Sequence[AuditEntry], slug: str) -> list[str]:
-    """Pair each operator action that changed Flagsmith with its nearest Flagsmith audit event."""
+def audit_trail(entries: Sequence[AuditEntry], spec: ExperimentSpec) -> list[str]:
+    """Pair each operator action that changed Flagsmith with its nearest Flagsmith audit event.
+
+    The webhook is organisation-wide, so events from another environment, or naming another
+    feature, are left out before pairing.
+    """
     lines = [
         "## Independent audit trail",
         "",
         "Operator actions that changed Flagsmith, each paired with the nearest event from "
         "Flagsmith's own audit log (received through the audit-log webhook) within "
-        f"{AUDIT_MATCH_WINDOW.seconds // 60} minutes. Pairing is by time only.",
+        f"{AUDIT_MATCH_WINDOW.seconds // 60} minutes. Events from another environment than "
+        f"`{spec.environment}`, or naming another feature than `{spec.flag}`, are left out; "
+        "pairing is otherwise by time only.",
         "",
     ]
     actions = [
-        e for e in entries if e.experiment_slug == slug and e.action in FLAG_CHANGING_ACTIONS
+        e for e in entries if e.experiment_slug == spec.slug and e.action in FLAG_CHANGING_ACTIONS
     ]
-    events = [_flagsmith_event(e) for e in entries if e.action == FLAGSMITH_AUDIT]
+    environment = spec.environment.lower()
+    events = [
+        (at, text)
+        for at, text, event_environment, feature in (
+            _flagsmith_event(e) for e in entries if e.action == FLAGSMITH_AUDIT
+        )
+        if event_environment in (None, environment) and feature in (None, spec.flag)
+    ]
     if not actions:
         return [
             *lines,
@@ -418,7 +449,7 @@ def render(
     ]
     for section in sections:
         lines += [*section(), ""]
-    lines += [*audit_trail(trail, a.spec.slug), ""]
+    lines += [*audit_trail(trail, a.spec), ""]
     if shipped is not None:
         lines += [
             f"Sections 1 to 9 use `{results_file}`. The record below is the decision recorded "
