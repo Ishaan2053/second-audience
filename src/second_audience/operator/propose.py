@@ -421,12 +421,15 @@ def validate(raw: str, evidence: Evidence) -> Draft:
 def _without_identifiers(prose: str, evidence: Evidence, proposal: Proposal) -> str:
     """The prose without session IDs and other names, so their digits are not read as numbers.
 
-    The proposal's own slug and variant key are names too.
+    The proposal's own slug and variant key are names too. Only names with a letter are
+    removed, and only as whole tokens: a digit-only name (a model label "40") would otherwise
+    erase a real figure ("40%", or the "4" in "45"). A sentence's full stop may follow a name.
     """
     prose = _SESSION_ID.sub(" ", prose)
     names = {n for n in (*evidence.identifiers(), proposal.slug, proposal.variant_key) if n}
     for name in sorted(names, key=len, reverse=True):
-        prose = prose.replace(name, " ")
+        if any(char.isalpha() for char in name):
+            prose = re.sub(rf"(?<![\w.-]){re.escape(name)}(?![\w-]|\.\w)", " ", prose)
     return prose
 
 
