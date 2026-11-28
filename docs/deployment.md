@@ -259,11 +259,14 @@ terminal.
 **Request volume.** The server reads both flags in one environment-flags request, at most
 once per 60 seconds, and only when a field `begin_task` or `/healthz` needs them. The upper
 bound is 1,440 requests a day (about 44,600 in a 31-day month) if something asked every
-minute without pause. The expected volume is far lower: the keep-alive pings `/healthz`
-every 10 minutes (about 4,500 a month), plus at most one more read in each minute in which
-field sessions begin. This comes on top of the existing `/healthz` Flagsmith probe (cached
-30 s) and the experiment's identity requests, against the free plan's 50,000 requests a
-month.
+minute without pause. Plan for that bound, not less: `render.yaml` sets
+`healthCheckPath: /healthz`, so Render's own health check calls it as well as the 10-minute
+keep-alive, and any caller more often than once a minute triggers a read each time the cache
+expires. This comes on top of the existing `/healthz` Flagsmith probe (cached 30 s, so up to
+2,880 a day) and the experiment's identity requests, against the free plan's 50,000 requests
+a month. Over the few days of the hackathon this is a few thousand requests a day; check the
+organisation's usage page a day after a deploy, and for longer-running use make `/healthz`
+report cached values without refreshing them.
 
 ## 11. Flagsmith integrations (SA-22)
 
