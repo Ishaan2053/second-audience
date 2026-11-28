@@ -218,3 +218,40 @@ def test_missing_cli_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(flagsmith_admin.shutil, "which", lambda name: None)
     with pytest.raises(FlagsmithAdminError, match="not on PATH"):
         FlagsmithAdmin("second-audience").whoami()
+
+
+def test_segment_commands(run: Callable[..., Recorder]) -> None:
+    rules = {"type": "ALL", "rules": []}
+
+    def respond(args: list[str]) -> tuple[int, Any, str]:
+        if args[:2] == ["segment", "list"]:
+            return 0, [{"id": 5, "name": "other"}, {"id": 7, "name": "sa-x-rollout"}], ""
+        if args[:2] == ["segment", "get"]:
+            return 0, {"id": 7, "name": "sa-x-rollout", "rules": rules}, ""
+        if args[:2] == ["segment", "create"]:
+            return 0, {"id": 8, "name": args[2]}, ""
+        if args[:2] == ["flag", "get"]:
+            return 0, {"enabled": True, "value": "v", "variants": []}, ""
+        return 0, None, ""
+
+    recorder = run(respond)
+    admin = _admin()
+    assert admin.get_segment("sa-x-rollout") == {"id": 7, "name": "sa-x-rollout", "rules": rules}
+    assert admin.get_segment("missing") is None
+    assert admin.create_segment("sa-y-rollout", rules, "why")["id"] == 8
+    admin.set_segment_override("error_style", 8, '{"a":true}', ["prescriptive"], ENV)
+    assert admin.segment_override("error_style", 8, ENV)["value"] == "v"
+    calls = [args for args, _ in recorder.calls]
+    assert calls[1] == ["segment", "get", "7", *SUFFIX, "--json"]
+    assert calls[3] == [
+        "segment", "create", "sa-y-rollout", "--rules", json.dumps(rules),
+        "--description", "why", *SUFFIX, "--json",
+    ]  # fmt: skip
+    assert calls[4] == [
+        "flag", "update", "error_style", "--segment", "8", "--enable",
+        "--value", '{"a":true}', "--type", "string", "--yes", "--weight", "prescriptive=0",
+        *SUFFIX, "--environment", ENV, "--json",
+    ]  # fmt: skip
+    assert calls[5] == [
+        "flag", "get", "error_style", "--segment", "8", *SUFFIX, "--environment", ENV, "--json",
+    ]  # fmt: skip

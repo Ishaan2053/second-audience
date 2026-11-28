@@ -176,7 +176,7 @@ class Harness:
             make_drafter=lambda settings: None,
             sleep=lambda seconds: None,
             make_proposer=lambda s: None,
-            smoke=lambda s: pytest.fail("no smoke session here"),
+            smoke=lambda s, label: pytest.fail("no smoke session here"),
         )
         monkeypatch.setattr(cli, "make_context", lambda: context)
 

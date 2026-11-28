@@ -247,6 +247,48 @@ class FlagsmithAdmin:
             )
         return defaults[0]
 
+    # --- segments (SA-21) ---------------------------------------------------------------------
+
+    def get_segment(self, name: str) -> dict[str, Any] | None:
+        """The project's segment with this name, with its rule tree, or `None`."""
+        for segment in _items(self._run("segment", "list")):
+            if segment.get("name") == name:
+                found: dict[str, Any] = self._run("segment", "get", str(segment["id"]))
+                return found
+        return None
+
+    def create_segment(self, name: str, rules: dict[str, Any], description: str) -> dict[str, Any]:
+        """Create a project segment from one rule tree (an object, not a list).
+
+        Segments belong to the project, not an environment; only an override makes one act.
+        """
+        created: dict[str, Any] = self._run(
+            "segment", "create", name, "--rules", json.dumps(rules), "--description", description
+        )
+        return created
+
+    def set_segment_override(
+        self, feature: str, segment_id: int, value: str, variant_keys: list[str], env: str
+    ) -> None:
+        """Give a segment its own enabled value for a multivariate flag, every variant at 0%.
+
+        At 0% the override serves its own value to every identity in the segment (spike
+        findings, SA-21). The CLI creates the override if the segment has none.
+        """
+        weights = ",".join(f"{key}=0" for key in variant_keys)
+        args = ["flag", "update", feature, "--segment", str(segment_id), "--enable"]
+        args += ["--value", value, "--type", "string", "--yes"]
+        if weights:
+            args += ["--weight", weights]
+        self._run(*args, environment=env)
+
+    def segment_override(self, feature: str, segment_id: int, env: str) -> dict[str, Any]:
+        """A segment override as `flag get --segment` shows it: enabled, value, variants."""
+        override: dict[str, Any] = self._run(
+            "flag", "get", feature, "--segment", str(segment_id), environment=env
+        )
+        return override
+
     def refresh_results(self, env: str, experiment_id: int) -> None:
         """Ask Flagsmith to recompute results; allowed once every 5 minutes."""
         self._api(f"api/v1/environments/{env}/experiments/{experiment_id}/results/refresh/", "POST")

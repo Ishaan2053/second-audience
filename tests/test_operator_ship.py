@@ -479,6 +479,7 @@ class Workspace:
         self.ledger = Ledger(create_engine(self.database_url))
         self.admin = FakeAdmin(raw)
         self.smokes = 0
+        self.labels: list[str] = []
         self.served = served
         self.smoke_error: BaseException | None = None
         self.settings = Settings(
@@ -501,8 +502,9 @@ class Workspace:
         )
         monkeypatch.setattr(cli, "make_context", lambda: context)
 
-    def _smoke(self, settings: Settings) -> ErrorStyle:
+    def _smoke(self, settings: Settings, label: str) -> ErrorStyle:
         self.smokes += 1
+        self.labels.append(label)
         if self.smoke_error is not None:
             raise self.smoke_error
         return self.served

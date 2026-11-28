@@ -389,7 +389,7 @@ class Workspace:
             make_drafter=lambda s: None,
             sleep=lambda seconds: None,
             make_proposer=lambda s: model,
-            smoke=lambda s: pytest.fail("sa propose runs no smoke session"),
+            smoke=lambda s, label: pytest.fail("sa propose runs no smoke session"),
         )
         monkeypatch.setattr(cli, "make_context", lambda: self.context)
 

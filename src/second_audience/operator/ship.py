@@ -337,12 +337,15 @@ async def observe_style(client: Client[Any]) -> ErrorStyle:
     return style_of(payload)
 
 
-def smoke_session(settings: Settings) -> ErrorStyle:
-    """Run one smoke session against `SA_SERVER_URL`, as lab traffic (`SA_LAB_KEY`)."""
+def smoke_session(settings: Settings, label: str = SMOKE_AGENT_LABEL) -> ErrorStyle:
+    """Run one smoke session against `SA_SERVER_URL`, as lab traffic (`SA_LAB_KEY`).
+
+    `label` is the agent label it sends; per-model checks send a model's label.
+    """
     if settings.sa_server_url is None or settings.sa_lab_key is None:
         raise RuntimeError("SA_SERVER_URL and SA_LAB_KEY must both be set")
     headers = {
-        AGENT_LABEL_HEADER: SMOKE_AGENT_LABEL,
+        AGENT_LABEL_HEADER: label,
         LAB_KEY_HEADER: settings.sa_lab_key.get_secret_value(),
     }
     transport = StreamableHttpTransport(settings.sa_server_url, headers=headers)
