@@ -628,9 +628,9 @@ and `gemini-2.5-pro` start auto-routing to newer models on 2026-12-01, after the
   crashes. Since SA-14b, a re-run on an experiment that already ended with the planned
   rollout records it without a second `complete/` (one that ended otherwise is still
   refused), and a `complete/` call that fails client-side leaves a `ship_attempt` audit row.
-- **Not yet run end to end.** The full flow against a throwaway Development experiment was
-  not run in SA-14, to avoid any Flagsmith write while experiment 680 is live; it belongs
-  before the Production run in SA-17.
+- **Not run end to end in SA-14.** The full flow against a throwaway Development experiment
+  was not run in SA-14, to avoid any Flagsmith write while experiment 680 is live. It ran in
+  SA-14c, on both rollouts (see "Ship rehearsal on Development (SA-14c)").
 
 ## Ship hardening (SA-14b)
 
@@ -647,3 +647,88 @@ and `gemini-2.5-pro` start auto-routing to newer models on 2026-12-01, after the
   environment key, because the variant is added in Development only.
 - **The smoke label is lab-only.** `ship_smoke` also requires `source == "lab"`, so a field
   client that names itself `sa-ship-smoke` is still counted.
+
+## Ship rehearsal on Development (SA-14c)
+
+On 2026-11-28 the full `sa start` → scripted traffic → `sa report` → `sa ship` flow ran
+against two throwaway experiments in **Development**, from a separate local clone with its own
+settings: the Development server key, a SQLite ledger and a local server on port 8766.
+Production, experiment 680, `error_style` and the hosted ledger were not touched. Both specs
+copied error-style-v1's arms and metrics, with `min_exposed_per_arm: 3`; each experiment got 16
+`scripts/smoke.py` sessions as lab traffic.
+
+| Experiment | Exposed (control / prescriptive) | Decision | `rollout_decision` | Served after ship | Smoke style |
+|---|---|---|---|---|---|
+| 1634 | 6 / 10 | `ship_variant` | `variant`, option 38555 | prescriptive | suggestion and corrected call |
+| 1637 | 9 / 7 | `inconclusive` | `control` | control | plain |
+
+- **The acceptance check passed on both rollouts.** Each run ended the experiment
+  (`completed`, `rollout_decision` as planned), read the flag back as serving the planned
+  value, and the first smoke session showed the expected style. Both runs exited 0 with
+  verification `finished`, no problems and no warnings. The ledger has a `start`, a `ship`
+  (verification `pending`) and a `ship_verify` row for each, and `decision.md` was written
+  and added to `report.md`. Before the real run, a wrong confirmation (`ship wrong`) aborted
+  and the experiment was still `running`.
+- **How `ship_variant` was reached.** Flagsmith shows no inference until each arm has 50
+  exposed sessions and 5 conversions per metric (see "Decisions for later tickets", SA-08).
+  So 1634 used a rehearsal-only `manual.yaml` giving the primary metric a win probability of
+  0.99 (shown as "from dashboard"). 1637 had no overlay, so the rule returned `inconclusive`
+  ("Flagsmith shows no inference ... yet") and kept control. This was the first live
+  `rollout_decision: "control"`.
+- **`complete/` answer and experiment read-back:**
+
+  ```text
+  variant: {"id": 1634, "status": "completed", "ended_at": "2026-11-28T10:04:40.645008Z",
+            "rollout_decision": "variant", "rollout_variant": 38555}
+  control: {"id": 1637, "status": "completed", "ended_at": "2026-11-28T10:08:50.104063Z",
+            "rollout_decision": "control", "rollout_variant": null}
+  ```
+
+  `rollout_variant` is a bare integer option ID, and `null` for control.
+- **Environment feature state** (`GET .../featurestates/?feature=<id>`, unrelated fields
+  left out). `multivariate_feature_option` is a **bare integer**, not a nested object.
+  `feature_state_value` stays the control value in every case; a shipped variant shows up
+  only as its option at 100%:
+
+  ```text
+  running (both):   "feature_state_value": "{...control...}", "enabled": true,
+                    "multivariate_feature_state_values": [{"id": 394504,
+                      "multivariate_feature_option": 38555, "percentage_allocation": 0.0}]
+  after variant:    "feature_state_value": "{...control...}", "enabled": true,
+                    "multivariate_feature_state_values": [{"id": 394516,
+                      "multivariate_feature_option": 38555, "percentage_allocation": 100.0}]
+  after control:    "feature_state_value": "{...control...}", "enabled": true,
+                    "multivariate_feature_state_values": [{"id": 394528,
+                      "multivariate_feature_option": 38558, "percentage_allocation": 0.0}]
+  ```
+
+  Every state carries an `environment_feature_version`, so feature versioning is on in
+  Development. `complete/` publishes a **new** feature state (new `id`, new version), and the
+  endpoint returned only the live one, so `feature_state`'s "exactly one environment default"
+  check held.
+- **The smoke session was not enrolled.** Each run needed one probe (the first, after the
+  6 s wait). Its ledger row has `variant` null and `in_experiment` false, so the ended
+  experiment did not count it.
+- **A re-run is refused.** `sa ship` again on either slug printed "refused: experiment ... has
+  already been shipped and recorded: the audit log already holds its ship_verify row; nothing
+  was changed" and exited 1.
+- **`is_final` needs a refresh after completion.** Straight after `sa ship`, both experiments'
+  results had `is_final: false` with the pre-ship `as_of`. A later `sa report` on 1634 (a
+  refresh outside the 5-minute window) gave `is_final: true` with `as_of` equal to `ended_at`,
+  and re-rendered the report with the decision record. `sa ship` does not refresh. For SA-17,
+  run `sa report <slug>` once after shipping to freeze the final numbers.
+- **Deleting a flag deletes its experiments.** After `flagsmith feature delete` on the two
+  throwaway flags, both experiments disappeared from the experiment list, and
+  `GET .../experiments/1634/` returned 404. The results page goes with them. Do not delete
+  `error_style` after the Production ship until the results are captured. The rehearsal's
+  three Development metrics were deleted by hand.
+- **Project-wide side effect.** `flagsmith feature create` creates a feature for the whole
+  project, so the throwaway flags existed in Production too while the rehearsal ran. Nothing
+  read them there, and both were deleted.
+- **The `network` experiment test is still flaky against Development.** It ran three times
+  from the rehearsal clone: one failure, then two passes (23 s and 18 s). In the failed run,
+  after `_wait_for_split` had seen 10 probes in a row with a variant, at least five of 20
+  sessions still got the default flag from `get_experiment_flag` ("flag ... unavailable;
+  ... gets the control style outside the experiment"). So a streak of good
+  `get_identity_flags` probes does not prove that every edge node serves the new feature to
+  `get_experiment_flag`.
