@@ -70,8 +70,8 @@ def _session(
     kind = get_scenario(scenario_id).kind
     ledger.start_session(session_id, scenario_id, kind, source, agent_label, None)
     for seq, (tool, arguments, result, styled) in enumerate(calls, start=1):
-        if styled and variant is not None:
-            ledger.record_exposure(session_id, variant, in_experiment=enrolled)
+        if styled:  # a fallback, like production, has no variant and is not enrolled
+            ledger.record_exposure(session_id, variant if enrolled else None, enrolled)
         code = result["error"]["code"] if isinstance(result, dict) and "error" in result else None
         args = {"session_id": session_id, **arguments}
         ledger.record_tool_call(session_id, seq, tool, args, result, code, styled)
@@ -126,7 +126,7 @@ def db(tmp_path: Path) -> Path:
     _session(ledger, "smoke", "s05", "prescriptive", [], agent_label=SMOKE_AGENT_LABEL)
     _session(ledger, "lonely", "s01", "control", [("book_room", attempt, {}, True)])
     _session(ledger, "gave-up", "s08", "prescriptive", [conflict] * 9, outcome="abandoned")
-    _session(ledger, "fallback", "s08", "control", [conflict] * 9, enrolled=False)
+    _session(ledger, "fallback", "s08", None, [conflict] * 9, enrolled=False)
     for arm in ("control", "prescriptive"):
         _session(ledger, f"field-{arm}", "s05", arm, [conflict], "incorrect", "claude", "field")
     _session(ledger, "other-model", "s05", "prescriptive", [conflict], agent_label="claude")
@@ -249,9 +249,11 @@ def test_find_pairs_report_is_per_source_and_leaves_out_unscored(ledger: Ledger)
     assert SMOKE_AGENT_LABEL not in text
     assert "pilot" not in text
     assert "gave-up" not in text
-    # Aligned control: the fallback session is left out of the count and the mean.
-    row = next(line for line in text.splitlines() if "aligned" in line and "control" in line)
-    assert _words(row).split() == ["aligned", "control", "2", "correct", "2", "2.00", "1"]
+    assert "fallback" not in text
+    # The fallback has no arm, so it is in no row; the abandoned session is counted as such.
+    rows = [_words(line).split() for line in text.splitlines()]
+    assert ["aligned", "control", "2", "correct", "2", "2.00", "0"] in rows
+    assert ["aligned", "prescriptive", "1", "no_booking", "1", "1.00", "1"] in rows
 
 
 def test_read_only_engine_refuses_writes(db: Path) -> None:
