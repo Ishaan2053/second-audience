@@ -313,6 +313,13 @@ def test_audit_appends_rows(ledger: Ledger, engine: Engine) -> None:
     assert all(r.at.utcoffset().total_seconds() == 0 for r in rows)
 
 
+def test_has_audit_matches_action_and_experiment(ledger: Ledger) -> None:
+    ledger.audit("ship", "error-style-v1", "{}", "ishaan")
+    assert ledger.has_audit("ship", "error-style-v1")
+    assert not ledger.has_audit("ship_verify", "error-style-v1")
+    assert not ledger.has_audit("ship", "error-style-v2")
+
+
 def test_failing_sessions_filters_orders_and_limits(ledger: Ledger) -> None:
     outcomes = {"a": "correct", "b": "incorrect", "c": "no_booking", "d": None, "e": "abandoned"}
     for session_id, outcome in outcomes.items():

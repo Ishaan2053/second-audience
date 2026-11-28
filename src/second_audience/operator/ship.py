@@ -10,7 +10,9 @@ was verified. A failure after the change is a recorded problem, never a missing 
 
 If the experiment has already ended with the rollout the plan names (a run that ended it but
 stopped before recording), a re-run takes the record-only path: no second `complete/` call,
-only the read-back, the smoke session and the records.
+only the read-back, the smoke session and the records. Once a run has finished verifying (a
+`ship_verify` audit row, or a `decision.md` that is no longer pending), there is nothing left
+to record and a re-run is refused.
 """
 
 import asyncio
@@ -40,6 +42,8 @@ from second_audience.operator.start import RUNNING
 
 COMPLETED = "completed"
 DECISION_FILE = "decision.md"
+PENDING_MARK = "**Verification pending:**"
+"""Marks a decision record written before verification finished."""
 
 SMOKE_SCENARIO = "s01"
 """Aligned: its first attempt hits a conflict that has a suggestion, so every style shows."""
@@ -134,9 +138,14 @@ def plan_ship(analysis: Analysis, experiment: dict[str, Any], results_file: Path
     if status == RUNNING:
         return plan
     variant = experiment.get("rollout_variant")
-    if experiment.get("rollout_decision") != plan.rollout_decision or (
-        variant is not None and _readable_id(variant) != plan.rollout_variant
-    ):
+    # Flagsmith returns rollout_variant (spike, question 8): a variant plan needs it present
+    # and equal; a control plan needs it absent or null.
+    variant_matches = (
+        variant is None
+        if plan.rollout_variant is None
+        else _readable_id(variant) == plan.rollout_variant
+    )
+    if experiment.get("rollout_decision") != plan.rollout_decision or not variant_matches:
         raise ShipRefusedError(
             f"{ended} (rollout_variant {variant!r}), not this plan's "
             f"{plan.rollout_decision!r} (rollout_variant {plan.rollout_variant!r}); nothing "
@@ -168,6 +177,29 @@ def stale_results(analysis: Analysis) -> list[str]:
             f"{as_of.isoformat()}), older than {STALE_AFTER.total_seconds() / 3600:g} hours"
         )
     return warnings
+
+
+def already_verified(folder: Path, verified_in_audit_log: bool) -> str | None:
+    """Why a record-only run has nothing left to record, or `None` if it may proceed.
+
+    A pending record or `ship` row alone means a run stopped before verifying, which a
+    record-only run is for.
+    """
+    if verified_in_audit_log:
+        return "the audit log already holds its ship_verify row"
+    path = folder / DECISION_FILE
+    if path.exists() and PENDING_MARK not in path.read_text(encoding="utf-8"):
+        return f"{path.as_posix()} already holds its final decision record"
+    return None
+
+
+def pending_record(folder: Path) -> str | None:
+    """The pending decision record an earlier run left in `decision.md`, if there is one."""
+    path = folder / DECISION_FILE
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8")
+    return text if PENDING_MARK in text else None
 
 
 def _readable_id(value: Any) -> int | None:
@@ -231,7 +263,10 @@ def complete(plan: ShipPlan, admin: FlagsmithAdmin) -> Outcome:
         )
     except json.JSONDecodeError as error:  # the CLI exited cleanly, so the call was made
         return Outcome({}, problems=[f"complete/ answered with unreadable JSON: {error}"])
-    return Outcome(dict(answer or {}))
+    try:
+        return Outcome(dict(answer or {}))
+    except (TypeError, ValueError) as error:  # an answer that is not an object
+        return Outcome({}, problems=[f"complete/ answered with an unreadable shape: {error}"])
 
 
 def read_back(plan: ShipPlan, admin: FlagsmithAdmin, outcome: Outcome) -> None:
@@ -436,10 +471,15 @@ def decision_record(plan: ShipPlan, outcome: Outcome, approved_by: str, now: dat
         *(f"- **Warning:** {warning}." for warning in plan.warnings),
     ]
     if not outcome.checked:
+        before = (
+            "Flagsmith reported the experiment already ended with this rollout"
+            if plan.record_only
+            else "Flagsmith accepted the change"
+        )
         lines.append(
-            "- **Verification pending:** Flagsmith accepted the change; the read-back and the "
-            "smoke session had not finished when this was written. If this line remains, "
-            "`sa ship` stopped before verifying: check the experiment and the flag by hand."
+            f"- {PENDING_MARK} {before}; the read-back and the smoke session had not finished "
+            "when this was written. If this line remains, `sa ship` stopped before verifying: "
+            "check the experiment and the flag by hand."
         )
     else:
         if not outcome.read_back:

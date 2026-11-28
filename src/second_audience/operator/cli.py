@@ -40,11 +40,13 @@ from second_audience.operator.ship import (
     Outcome,
     ShipPlan,
     ShipRefusedError,
+    already_verified,
     append_record,
     audit_detail,
     complete,
     decision_record,
     guardrail_ledger_counts,
+    pending_record,
     plan_ship,
     read_back,
     smoke_session,
@@ -481,6 +483,11 @@ def ship(
     try:
         experiment = admin.get_experiment(run_state.environment_key, run_state.experiment_id)
         plan = plan_ship(analysis, experiment, results_file)
+        done = plan.record_only and already_verified(folder, ledger.has_audit("ship_verify", slug))
+        if done:
+            raise ShipRefusedError(
+                f"experiment {slug} has already been shipped and recorded: {done}"
+            )
     except ShipRefusedError as error:
         for reason in analysis.decision.reasons:
             typer.echo(f"  - {reason}")
@@ -510,21 +517,27 @@ def ship(
     typed = typer.prompt(f"\nType `{phrase}` to {action}")
     if typed.strip() != phrase:
         raise _fail("ship: confirmation did not match; nothing was changed")
+    earlier: str | None = None
     if plan.record_only:
         outcome = Outcome(dict(experiment))
+        earlier = pending_record(folder)  # replaced in the report, not kept beside the new one
     else:
+        check = (
+            f"Check experiment {run_state.experiment_id} in Flagsmith before running `sa ship` "
+            "again: if it ended with this rollout, the re-run records the decision without "
+            "ending it."
+        )
         try:
             outcome = complete(plan, admin)
         except FlagsmithAdminError as error:
             saved = _record_attempt(ledger, plan, approver, error)
-            raise _fail(
-                f"ship: the complete/ call failed: {error}\n{saved} Check experiment "
-                f"{run_state.experiment_id} in Flagsmith before running `sa ship` again: if it "
-                "ended with this rollout, the re-run records the decision without ending it."
-            ) from error
+            raise _fail(f"ship: the complete/ call failed: {error}\n{saved} {check}") from error
+        except KeyboardInterrupt as error:  # the call may already have reached Flagsmith
+            saved = _record_attempt(ledger, plan, approver, error)
+            raise _fail(f"ship: interrupted during the complete/ call.\n{saved} {check}") from error
     # The experiment has ended: record that now, so no later failure can leave it unrecorded.
     now = context.now()
-    pending = _record(ledger, folder, plan, outcome, approver, now, None)
+    pending = _record(ledger, folder, plan, outcome, approver, now, earlier)
     try:
         read_back(plan, admin, outcome)
         _smoke(context, settings, plan, outcome)
@@ -543,8 +556,8 @@ def ship(
         )
 
 
-def _record_attempt(ledger: Ledger, plan: ShipPlan, approver: str, error: Exception) -> str:
-    """Audit a `complete/` call that failed client-side; returns a sentence for the user.
+def _record_attempt(ledger: Ledger, plan: ShipPlan, approver: str, error: BaseException) -> str:
+    """Audit a `complete/` call that failed client-side or was interrupted; returns a sentence.
 
     The CLI failing does not prove Flagsmith refused the change, so the attempt is kept.
     """
@@ -553,7 +566,7 @@ def _record_attempt(ledger: Ledger, plan: ShipPlan, approver: str, error: Except
         "rollout_decision": plan.rollout_decision,
         "rollout_variant": plan.rollout_variant,
         "results_file": plan.results_file.as_posix(),
-        "error": str(error),
+        "error": str(error) or type(error).__name__,
     }
     try:
         ledger.audit(
@@ -585,7 +598,12 @@ def _record(
     except Exception as error:  # the change is made; the file record below must still be written
         outcome.problems.append(f"audit log write ({action}) failed: {type(error).__name__}")
     record = decision_record(plan, outcome, approver, now)
-    append_record(folder, record, replacing)
+    try:
+        append_record(folder, record, replacing)
+    except OSError as error:  # the change is made; the audit row and the next write remain
+        outcome.problems.append(
+            f"decision record write ({DECISION_FILE}) failed: {type(error).__name__}: {error}"
+        )
     return record
 
 

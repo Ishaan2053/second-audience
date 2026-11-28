@@ -621,11 +621,16 @@ at the stopping point.
   so no later failure (a read-back error, the smoke session, Ctrl-C) can leave an ended
   experiment unrecorded.
 - **Record-only re-run:** if the experiment is already `completed` with the `rollout_decision`
-  (and `rollout_variant`, when Flagsmith returns it) the plan names, for example because a
+  the plan names (for a variant plan, `rollout_variant` must be present and equal to the
+  option ID; for a control plan it must be absent or null), for example because a
   `complete/` call succeeded but its answer never reached `sa ship`, a re-run prints "none"
   as the change, asks for the same typed `ship <slug>`, makes no second `complete/` call, and
-  runs the read-back, smoke session and both records (audit detail `record_only: true`). A
-  completed experiment with a different rollout is refused.
+  runs the read-back, smoke session and both records (audit detail `record_only: true`),
+  replacing a pending record an earlier run left in the report. A completed experiment with
+  a different rollout is refused, and so is a re-run once a run has finished verifying (a
+  `ship_verify` audit row for the slug, or a `decision.md` no longer marked pending): only a
+  pending record, a pending `ship` row or nothing (the `ship_attempt` case) lets it proceed.
+  A Ctrl-C during the `complete/` call is audited as a `ship_attempt` before exiting.
 - **Verification:** reads the experiment back (`completed`, matching `rollout_decision`) and
   the environment's default feature state (`GET .../featurestates/?feature=<id>`): enabled,
   and serving the expected arm's value (a variant at 100%, or the default with every variant

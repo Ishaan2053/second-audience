@@ -155,6 +155,8 @@ def test_plan_refuses_an_experiment_that_ended_otherwise(tmp_path: Path) -> None
         {"status": "completed", "ended_at": "x", "rollout_decision": "control"},
         {"status": "completed", "rollout_decision": "variant", "rollout_variant": 99},
         {"status": "completed", "rollout_decision": "variant", "rollout_variant": {"x": 1}},
+        {"status": "completed", "rollout_decision": "variant", "rollout_variant": None},
+        {"status": "completed", "rollout_decision": "variant"},
     ):
         with pytest.raises(ShipRefusedError, match=r"already ended.*not this plan's 'variant'"):
             plan_ship(analysis, ended, Path("r.json"))
@@ -166,7 +168,20 @@ def test_plan_refuses_an_experiment_that_ended_otherwise(tmp_path: Path) -> None
         plan_ship(early, ended, Path("r.json"))
 
 
-@pytest.mark.parametrize("variant", [None, VARIANT_ID, {"id": VARIANT_ID}])
+def test_a_control_plan_refuses_a_non_null_rollout_variant(tmp_path: Path) -> None:
+    analysis = analysis_for(results_json(inference=LOSS), tmp_path)
+    for variant in (VARIANT_ID, {"x": 1}, "unreadable"):
+        ended = {"status": "completed", "rollout_decision": "control", "rollout_variant": variant}
+        with pytest.raises(ShipRefusedError, match="not this plan's 'control'"):
+            plan_ship(analysis, ended, Path("r.json"))
+    for ended in (
+        {"status": "completed", "rollout_decision": "control", "rollout_variant": None},
+        {"status": "completed", "rollout_decision": "control"},
+    ):
+        assert plan_ship(analysis, ended, Path("r.json")).record_only
+
+
+@pytest.mark.parametrize("variant", [VARIANT_ID, {"id": VARIANT_ID}])
 def test_plan_records_only_an_experiment_that_ended_as_planned(
     tmp_path: Path, variant: Any
 ) -> None:
@@ -265,7 +280,10 @@ class FakeAdmin(FlagsmithAdmin):
         if self.ignore_complete:
             return self.experiment
         self.experiment.update(
-            status="completed", ended_at="2026-11-29T07:00:00Z", rollout_decision=rollout_decision
+            status="completed",
+            ended_at="2026-11-29T07:00:00Z",
+            rollout_decision=rollout_decision,
+            rollout_variant=rollout_variant,
         )
         if rollout_decision == "variant":
             self.state = _feature_state(ARM_FLAG_VALUES["control"], 100.0)
@@ -297,6 +315,17 @@ def test_read_back_reports_what_does_not_match(tmp_path: Path) -> None:
     read_back(plan, admin, outcome)
     assert len(outcome.problems) == 3  # status, rollout_decision, served value
     assert not outcome.smoke_safe
+
+
+def test_an_answer_that_is_not_an_object_is_a_problem_not_an_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = plan_ship(analysis_for(results_json(inference=WIN), tmp_path), RUNNING, Path("r"))
+    admin = FakeAdmin(results_json(inference=WIN))
+    monkeypatch.setattr(admin, "complete_experiment", lambda *args: [1])
+    outcome = complete(plan, admin)
+    assert outcome.experiment == {}
+    assert outcome.problems[0].startswith("complete/ answered with an unreadable shape")
 
 
 def test_unreadable_feature_state_is_a_problem_not_an_exception(tmp_path: Path) -> None:
@@ -385,6 +414,15 @@ def test_decision_record_before_verification_says_it_is_pending(tmp_path: Path) 
     assert "**Verification pending:**" in text
     assert "Verified:" not in text
     assert "now serves" not in text
+
+
+def test_pending_record_on_the_record_only_path_does_not_claim_a_change(tmp_path: Path) -> None:
+    analysis = analysis_for(results_json(inference=WIN), tmp_path)
+    ended = {"status": "completed", "rollout_decision": "variant", "rollout_variant": VARIANT_ID}
+    plan = plan_ship(analysis, ended, Path("r.json"))
+    text = decision_record(plan, Outcome(ended), "dev", NOW)
+    assert "**Verification pending:** Flagsmith reported the experiment already ended" in text
+    assert "accepted the change" not in text
 
 
 def test_audit_detail_reports_ledger_counts_when_a_guardrail_has_no_inference(
@@ -679,6 +717,100 @@ def test_rerun_after_an_unrecorded_completion_records_without_ending_again(
     record = (workspace.folder / "decision.md").read_text(encoding="utf-8")
     assert "without calling complete/ again" in record
     assert "Verified: experiment ended" in record
+
+
+@pytest.mark.parametrize("clear_audit_log", [False, True])
+def test_rerun_after_a_verified_ship_is_refused_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clear_audit_log: bool
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+    assert invoke("ship", SLUG, answer=f"ship {SLUG}\n").exit_code == 0
+    if clear_audit_log:  # the final decision.md alone is enough to refuse
+        with create_engine(workspace.database_url).begin() as conn:
+            conn.execute(audit_log.delete())
+    rows = workspace.audit_rows()
+    record = (workspace.folder / "decision.md").read_text(encoding="utf-8")
+    report = (workspace.folder / "report.md").read_text(encoding="utf-8")
+    changes, smokes = list(workspace.admin.changes), workspace.smokes
+    result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
+    assert result.exit_code == 1
+    assert "has already been shipped and recorded" in result.output
+    assert "nothing was changed" in result.output
+    assert workspace.audit_rows() == rows
+    assert (workspace.folder / "decision.md").read_text(encoding="utf-8") == record
+    assert (workspace.folder / "report.md").read_text(encoding="utf-8") == report
+    assert (workspace.admin.changes, workspace.smokes) == (changes, smokes)
+
+
+def test_rerun_after_a_pending_only_record_completes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+    real_read_back = cli.read_back
+
+    def crash(*args: Any) -> None:
+        raise RuntimeError("process died")
+
+    monkeypatch.setattr(cli, "read_back", crash)  # stops right after the pending record
+    assert invoke("ship", SLUG, answer=f"ship {SLUG}\n").exit_code == 1
+    assert [r.action for r in workspace.audit_rows()] == ["ship"]
+    pending = (workspace.folder / "decision.md").read_text(encoding="utf-8")
+    assert "**Verification pending:**" in pending
+    monkeypatch.setattr(cli, "read_back", real_read_back)
+    result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
+    assert result.exit_code == 0, result.output
+    assert "record this decision for the experiment that has already ended" in result.output
+    assert workspace.admin.changes == [("variant", VARIANT_ID)]  # complete/ only the first time
+    assert [r.action for r in workspace.audit_rows()] == ["ship", "ship", "ship_verify"]
+    report = (workspace.folder / "report.md").read_text(encoding="utf-8")
+    assert report.count("## Decision") == 1  # the earlier pending record was replaced
+    assert "Verified: experiment ended" in report
+    assert "pending" not in report
+
+
+def test_interrupted_complete_call_is_audited_as_an_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+
+    def interrupted(*args: Any) -> dict[str, Any]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(workspace.admin, "complete_experiment", interrupted)
+    result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "interrupted during the complete/ call" in result.output
+    (row,) = workspace.audit_rows()
+    assert row.action == "ship_attempt"
+    assert json.loads(row.detail)["error"] == "KeyboardInterrupt"
+    assert not (workspace.folder / "decision.md").exists()
+
+
+def test_failed_first_record_write_is_a_recorded_problem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+    original = cli.append_record
+    calls: list[str | None] = []
+
+    def flaky(folder: Path, record: str, replacing: str | None = None) -> Path:
+        calls.append(replacing)
+        if len(calls) == 1:
+            raise PermissionError("decision.md is locked")
+        return original(folder, record, replacing)
+
+    monkeypatch.setattr(cli, "append_record", flaky)
+    result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    _, row = workspace.audit_rows()
+    assert json.loads(row.detail)["problems"] == [
+        "decision record write (decision.md) failed: PermissionError: decision.md is locked"
+    ]
+    record = (workspace.folder / "decision.md").read_text(encoding="utf-8")
+    assert "**Verification failed:**" in record
+    assert "decision.md is locked" in record
 
 
 def test_failed_complete_call_is_audited_as_an_attempt(
