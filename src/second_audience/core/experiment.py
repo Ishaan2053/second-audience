@@ -9,7 +9,7 @@ reach the caller: the session gets the control style and is left out of the expe
 import logging
 import threading
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol, Self
 
@@ -66,6 +66,27 @@ def _control_flag(feature_name: str) -> DefaultFlag:
     return DefaultFlag(enabled=True, value=ARM_FLAG_VALUES["control"])
 
 
+def sdk_from_settings(
+    settings: Settings,
+    *,
+    enable_events: bool = False,
+    default_flag_handler: Callable[[str], DefaultFlag] | None = None,
+) -> Flagsmith:
+    """A remote-evaluation Flagsmith SDK client with the project's timeout and retry policy."""
+    if settings.flagsmith_environment_key is None:
+        raise ValueError("FLAGSMITH_ENVIRONMENT_KEY is required for the Flagsmith client")
+    return Flagsmith(
+        environment_key=settings.flagsmith_environment_key.get_secret_value(),
+        api_url=settings.flagsmith_api_url,
+        request_timeout_seconds=settings.flagsmith_request_timeout_seconds,
+        # The SDK default retries a failed connection three times, so an outage would
+        # stall a tool call for four timeouts. One retry bounds it at two.
+        retries=Retry(total=1, backoff_factor=0.1),
+        enable_events=enable_events,
+        default_flag_handler=default_flag_handler,
+    )
+
+
 def assignment_from_flag(flag: Flag | DefaultFlag) -> Assignment:
     """Turn a resolved flag into a style and the variant key, if the session is enrolled."""
     if not isinstance(flag, Flag) or not flag.enabled:
@@ -93,18 +114,7 @@ class FlagsmithExperimentClient:
     @classmethod
     def from_settings(cls, settings: Settings, flag_name: str | None = None) -> Self:
         """Build a client from `Settings` for `flag_name` (default `SA_FLAG_NAME`)."""
-        if settings.flagsmith_environment_key is None:
-            raise ValueError("FLAGSMITH_ENVIRONMENT_KEY is required for the Flagsmith client")
-        sdk = Flagsmith(
-            environment_key=settings.flagsmith_environment_key.get_secret_value(),
-            api_url=settings.flagsmith_api_url,
-            request_timeout_seconds=settings.flagsmith_request_timeout_seconds,
-            # The SDK default retries a failed connection three times, so an outage would
-            # stall a tool call for four timeouts. One retry bounds it at two.
-            retries=Retry(total=1, backoff_factor=0.1),
-            enable_events=True,
-            default_flag_handler=_control_flag,
-        )
+        sdk = sdk_from_settings(settings, enable_events=True, default_flag_handler=_control_flag)
         return cls(sdk, flag_name or settings.sa_flag_name)
 
     def reachable(self) -> bool:

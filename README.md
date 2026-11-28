@@ -570,9 +570,9 @@ lists every variable. With `SA_ENV=prod`, `FLAGSMITH_ENVIRONMENT_KEY`, `SA_DATAB
 | `SA_OPERATOR_MODEL` | `gemini-3.5-flash-lite` | operator | drafts report prose and proposals |
 | `SA_MAX_TOOL_CALLS` | `12` | server | per-session tool-call budget |
 | `SA_SESSION_IDLE_SECONDS` | `600` | server | idle timeout |
-| `SA_FIELD_SESSIONS_PER_IP_PER_HOUR` | `10` | server | field rate limit |
-| `SA_FIELD_ENABLED` | `true` | server | kill switch for field sessions |
-| `SA_MAX_CONCURRENT_SESSIONS` | `50` | server | open sessions above which field sessions are refused |
+| `SA_FIELD_SESSIONS_PER_IP_PER_HOUR` | `10` | server | field rate limit; fallback for the `field_limits` flag |
+| `SA_FIELD_ENABLED` | `true` | server | kill switch for field sessions; fallback for the `field_enabled` flag |
+| `SA_MAX_CONCURRENT_SESSIONS` | `50` | server | open sessions above which field sessions are refused; fallback for the `field_limits` flag |
 | `SA_TRUST_PROXY` | `false` | server | read the client IP from `X-Forwarded-For` (only behind the host's proxy) |
 | `SA_GIT_COMMIT` | none | server | commit shown at `/healthz` |
 

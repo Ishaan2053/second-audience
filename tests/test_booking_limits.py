@@ -14,6 +14,7 @@ from second_audience.booking.limits import (
     hash_ip,
     ip_salt,
 )
+from second_audience.core.controls import ControlValues, FieldLimits
 
 
 class FakeClock:
@@ -28,60 +29,73 @@ class FakeClock:
 
 def test_limiter_allows_up_to_the_limit_then_reports_the_wait() -> None:
     clock = FakeClock()
-    limiter = SlidingWindowLimiter(3, 60.0, clock)
-    assert [limiter.acquire("a") for _ in range(3)] == [None, None, None]
+    limiter = SlidingWindowLimiter(60.0, clock)
+    assert [limiter.acquire("a", 3) for _ in range(3)] == [None, None, None]
     clock.now += 15
-    assert limiter.acquire("a") == pytest.approx(45.0)
+    assert limiter.acquire("a", 3) == pytest.approx(45.0)
 
 
 def test_limiter_window_slides_one_event_at_a_time() -> None:
     clock = FakeClock()
-    limiter = SlidingWindowLimiter(2, 60.0, clock)
-    assert limiter.acquire("a") is None
+    limiter = SlidingWindowLimiter(60.0, clock)
+    assert limiter.acquire("a", 2) is None
     clock.now += 30
-    assert limiter.acquire("a") is None
+    assert limiter.acquire("a", 2) is None
     clock.now += 30  # the first event leaves the window
-    assert limiter.acquire("a") is None
-    assert limiter.acquire("a") == pytest.approx(30.0)
+    assert limiter.acquire("a", 2) is None
+    assert limiter.acquire("a", 2) == pytest.approx(30.0)
 
 
 def test_limiter_keys_are_independent() -> None:
-    limiter = SlidingWindowLimiter(1, 60.0, FakeClock())
-    assert limiter.acquire("a") is None
-    assert limiter.acquire("a") is not None
-    assert limiter.acquire("b") is None
+    limiter = SlidingWindowLimiter(60.0, FakeClock())
+    assert limiter.acquire("a", 1) is None
+    assert limiter.acquire("a", 1) is not None
+    assert limiter.acquire("b", 1) is None
 
 
 def test_refused_attempts_do_not_extend_the_window() -> None:
     clock = FakeClock()
-    limiter = SlidingWindowLimiter(1, 60.0, clock)
-    assert limiter.acquire("a") is None
+    limiter = SlidingWindowLimiter(60.0, clock)
+    assert limiter.acquire("a", 1) is None
     for _ in range(5):
         clock.now += 10
-        assert limiter.acquire("a") is not None
+        assert limiter.acquire("a", 1) is not None
     clock.now += 10
-    assert limiter.acquire("a") is None
+    assert limiter.acquire("a", 1) is None
 
 
 def test_limiter_forgets_expired_keys() -> None:
     clock = FakeClock()
-    limiter = SlidingWindowLimiter(1, 60.0, clock)
+    limiter = SlidingWindowLimiter(60.0, clock)
     for key in ("a", "b", "c"):
-        limiter.acquire(key)
+        limiter.acquire(key, 1)
     clock.now += 120
-    limiter.acquire("d")
+    limiter.acquire("d", 1)
     assert set(limiter._events) == {"d"}
 
 
-def gate(**overrides: object) -> tuple[FieldGate, FakeClock]:
+class MutableControls:
+    """A control source whose values a test can change between admissions."""
+
+    def __init__(self, enabled: bool, max_concurrent_sessions: int, per_ip: int) -> None:
+        self.set(enabled, max_concurrent_sessions, per_ip)
+
+    def set(self, enabled: bool, max_concurrent_sessions: int, per_ip: int) -> None:
+        limits = FieldLimits(
+            sessions_per_ip_per_hour=per_ip, max_concurrent_sessions=max_concurrent_sessions
+        )
+        self.values = ControlValues(enabled, limits, "flagsmith", "flagsmith")
+
+    def get(self) -> ControlValues:
+        return self.values
+
+
+def gate(
+    enabled: bool = True, max_concurrent_sessions: int = 5, sessions_per_ip_per_hour: int = 2
+) -> tuple[FieldGate, FakeClock]:
     clock = FakeClock()
-    config: dict[str, object] = {
-        "enabled": True,
-        "max_concurrent_sessions": 5,
-        "sessions_per_ip_per_hour": 2,
-    }
-    config.update(overrides)
-    return FieldGate(clock=clock, **config), clock  # type: ignore[arg-type]
+    source = MutableControls(enabled, max_concurrent_sessions, sessions_per_ip_per_hour)
+    return FieldGate(source, clock), clock
 
 
 def test_gate_rate_limits_per_ip_hour() -> None:
@@ -113,6 +127,40 @@ def test_gate_kill_switch_refuses_everything() -> None:
     assert refusal.code == FIELD_CLOSED
     assert refusal.retry_after_seconds is None
     assert field_gate.admit(None, 0) is not None
+
+
+def test_gate_applies_changed_controls_on_the_next_admission() -> None:
+    clock = FakeClock()
+    source = MutableControls(True, 5, 2)
+    field_gate = FieldGate(source, clock)
+    assert field_gate.admit("ip1", 0) is None
+    clock.now += 10
+    assert field_gate.admit("ip1", 0) is None
+    assert field_gate.admit("ip1", 0) is not None
+    source.set(True, 5, 3)  # raised limit: the same window history, one more slot
+    assert field_gate.admit("ip1", 0) is None
+    source.set(True, 1, 3)  # lowered cap
+    refusal = field_gate.admit("ip2", 1)
+    assert refusal is not None
+    assert refusal.code == SERVER_BUSY
+    assert "limit of 1 open sessions" in refusal.message
+    source.set(False, 5, 3)  # kill switch
+    refusal = field_gate.admit("ip2", 0)
+    assert refusal is not None
+    assert refusal.code == FIELD_CLOSED
+    source.set(True, 5, 3)
+    assert field_gate.admit("ip2", 0) is None
+
+
+def test_lowered_limit_waits_for_enough_events_to_leave_the_window() -> None:
+    clock = FakeClock()
+    limiter = SlidingWindowLimiter(60.0, clock)
+    for _ in range(3):
+        assert limiter.acquire("a", 3) is None
+        clock.now += 10
+    # Events at 0, 10 and 20 s; now 30 s. A limit of 1 needs all three gone: at 80 s.
+    assert limiter.acquire("a", 1) == pytest.approx(50.0)
+    assert limiter.acquire("a", 2) == pytest.approx(40.0)  # two gone: at 70 s
 
 
 def test_gate_without_an_address_applies_only_the_cap() -> None:
