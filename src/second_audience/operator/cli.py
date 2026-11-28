@@ -28,7 +28,7 @@ from second_audience.operator.propose import (
     taken_slugs,
 )
 from second_audience.operator.repo import GitError, Repo
-from second_audience.operator.report import render, report_dir, status_lines
+from second_audience.operator.report import AUDIT_MATCH_WINDOW, render, report_dir, status_lines
 from second_audience.operator.results import (
     ExperimentResults,
     latest_saved,
@@ -330,13 +330,14 @@ def report(
         )
     except FlagsmithAdminError as error:
         raise _fail(f"report: {error}") from error
-    analysis, _ = _analyse(context, settings, spec, run_state, saved.results)
+    analysis, ledger = _analyse(context, settings, spec, run_state, saved.results)
+    trail = ledger.audit_entries(run_state.started_at - AUDIT_MATCH_WINDOW)
     drafter = None if no_llm else context.make_drafter(settings)
     written = write_narrative(analysis, drafter, settings.sa_operator_model)
     path = folder / "report.md"
     shipped = folder / DECISION_FILE
     record = shipped.read_text(encoding="utf-8") if shipped.exists() else None
-    text = render(analysis, written, saved.path.as_posix(), saved.note, record)
+    text = render(analysis, written, saved.path.as_posix(), saved.note, record, trail)
     path.write_text(text, encoding="utf-8", newline="\n")
     typer.echo(f"Results: {saved.path.as_posix()} ({saved.note})")
     typer.echo(f"Prose: {written.author}")

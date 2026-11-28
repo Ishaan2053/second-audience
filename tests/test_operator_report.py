@@ -13,7 +13,13 @@ from sqlalchemy import create_engine, select
 from typer.testing import CliRunner
 
 from second_audience.config import Settings
-from second_audience.core.ledger import Ledger, SessionRecord, audit_log
+from second_audience.core.ledger import (
+    FLAGSMITH_AUDIT,
+    AuditEntry,
+    Ledger,
+    SessionRecord,
+    audit_log,
+)
 from second_audience.operator import cli
 from second_audience.operator.analysis import (
     SMOKE_AGENT_LABEL,
@@ -31,7 +37,7 @@ from second_audience.operator.narrative import (
     unsupported_numbers,
     write_narrative,
 )
-from second_audience.operator.report import render
+from second_audience.operator.report import audit_trail, render
 from second_audience.operator.results import (
     ExperimentResults,
     Inference,
@@ -671,6 +677,59 @@ def test_report_uses_a_checked_model_draft(tmp_path: Path, monkeypatch: pytest.M
     assert "A drafted decision." in text
     assert "drafted by gemini-3.5-flash-lite" in text
     assert len(workspace.drafts) == 1
+
+
+def _entry(at: datetime, action: str, slug: str | None, detail: str = "{}") -> AuditEntry:
+    return AuditEntry(at=at, action=action, experiment_slug=slug, detail=detail, approved_by="dev")
+
+
+def _event(created: str, log: str) -> str:
+    return json.dumps({"created_date": created, "log": log})
+
+
+def test_audit_trail_pairs_each_flag_change_with_the_nearest_event() -> None:
+    entries = [
+        _entry(STARTED, "start", SLUG),
+        _entry(
+            STARTED, FLAGSMITH_AUDIT, None, _event("2026-11-26T14:59:50Z", "Experiment | created")
+        ),
+        _entry(STARTED, FLAGSMITH_AUDIT, None, _event("2026-11-26T14:55:00Z", "Older event")),
+        _entry(STARTED + timedelta(minutes=1), "peek", SLUG),
+        _entry(NOW, "ship", SLUG),
+        _entry(NOW, "ship", "another-slug"),
+    ]
+    lines = audit_trail(entries, SLUG)
+    assert lines[0] == "## Independent audit trail"
+    table = [line for line in lines if line.startswith("| start") or line.startswith("| ship")]
+    assert table == [
+        "| start | 2026-11-26 15:00:00 UTC | dev | Experiment / created | "
+        "2026-11-26 14:59:50 UTC | -10 |",
+        "| ship | 2026-11-27 06:00:00 UTC | dev | no matching event | n/a | n/a |",
+    ]
+    assert not any("Flagsmith audit events have been received" in line for line in lines)
+
+
+def test_audit_trail_says_when_no_webhook_events_arrived() -> None:
+    lines = audit_trail([_entry(STARTED, "start", SLUG)], SLUG)
+    assert "| start | 2026-11-26 15:00:00 UTC | dev | no matching event | n/a | n/a |" in lines
+    assert lines[-1].startswith("No Flagsmith audit events have been received")
+    assert audit_trail([], SLUG)[-1].startswith("No operator action")
+
+
+def test_report_includes_the_independent_audit_trail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json())
+    workspace.ledger.audit("start", SLUG, "{}", "dev")
+    workspace.ledger.audit(
+        FLAGSMITH_AUDIT, None, json.dumps({"log": "Flag state updated: error_style"}), None
+    )
+    result = invoke("report", SLUG, "--no-llm")
+    assert result.exit_code == 0, result.output
+    text = (tmp_path / "reports" / SLUG / "report.md").read_text(encoding="utf-8")
+    assert "## Independent audit trail" in text
+    assert "| start |" in text
+    assert "| Flag state updated: error_style |" in text
 
 
 def test_status_without_a_started_experiment_fails(
