@@ -50,11 +50,13 @@ second-audience/
                                 manual.yaml (values copied from the dashboard where the API returns no
                                 inference); decision.md written by `sa ship`
   docs/                         plans, architecture, RESULTS.md, deployment, tickets
+  examples/inventory_server/    second example MCP server on the public API, scripted client (SA-18)
   src/second_audience/
     config.py                   Settings (pydantic-settings)
     core/
       experiment.py             ExperimentClient (Flagsmith SDK wrapper)
       ledger.py                 Ledger (SQLAlchemy Core)
+      middleware.py             SecondAudience: public API over the two above (SA-18)
       styles.py                 ErrorStyle config parsed from the flag value
     booking/
       world.py                  rooms, bookings, fixed clock
@@ -108,6 +110,7 @@ must be set explicitly.
 | `FLAGSMITH_API_URL` | server | optional override |
 | `FLAGSMITH_REQUEST_TIMEOUT_SECONDS` | server | per-request timeout, default 2; one retry, then the control style |
 | `SA_FLAG_NAME` | server, operator | default `error_style`; `sa doctor` checks the spec uses it |
+| `SA_EXAMPLE_FLAG_NAME` | inventory example | flag the example server reads, default `stock_error_style`; must differ from `SA_FLAG_NAME` |
 | `SA_FLAGSMITH_PROJECT` | operator | Flagsmith project the CLI manages; default `second-audience` |
 | `SA_DATABASE_URL` | server, operator, lab, demo | ledger; default `sqlite:///./sa.db`; Postgres as `postgresql+psycopg://...` |
 | `GEMINI_API_KEY` | lab, operator | model access |
@@ -349,6 +352,28 @@ class ExperimentClient(Protocol):
 
 Exact SDK method names, the events flag and minimum versions are confirmed in SA-02 and
 recorded in `docs/spike-findings.md`.
+
+### 3.5.1 Public middleware API (`core/middleware.py`, SA-18)
+
+`SecondAudience` composes an `ExperimentClient` and an optional `Ledger` for servers other
+than the booking server, and adds no behaviour of its own. It is re-exported from
+`second_audience.core`, which never imports `second_audience.booking` (a test inspects the
+imports).
+
+- `from_settings(settings=None, *, flag_name=None, ledger=None)`: the Flagsmith client for
+  `flag_name` (default `SA_FLAG_NAME`) when `FLAGSMITH_ENVIRONMENT_KEY` is set, otherwise a
+  `NullExperimentClient` (control style, outside any experiment).
+- `variant(session_id, traits=None) -> ErrorStyle`: the first call per session resolves the
+  style and records the exposure (in Flagsmith and, with a ledger, in `sessions`); later calls
+  return the remembered style.
+- `outcome(session_id, event, value=None) -> bool`: sends the event only for a session exposed
+  inside a running experiment; an unknown event name raises `ValueError`.
+- `end(session_id)`: forgets the session and flushes if it was enrolled. `flush()` at shutdown.
+
+The booking server is not moved onto this API (its session flow is frozen with experiment
+680). `examples/inventory_server/` is the second example: three stock tools, one styled error
+(`INSUFFICIENT_STOCK`), a scripted client that shows both arms with `NullExperimentClient`,
+and its own flag (`SA_EXAMPLE_FLAG_NAME`, refused if equal to `SA_FLAG_NAME`).
 
 ### 3.6 Ledger (`core/ledger.py`)
 

@@ -91,8 +91,8 @@ class FlagsmithExperimentClient:
         self._lock = threading.Lock()
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> Self:
-        """Build a client from `Settings`; needs `FLAGSMITH_ENVIRONMENT_KEY`."""
+    def from_settings(cls, settings: Settings, flag_name: str | None = None) -> Self:
+        """Build a client from `Settings` for `flag_name` (default `SA_FLAG_NAME`)."""
         if settings.flagsmith_environment_key is None:
             raise ValueError("FLAGSMITH_ENVIRONMENT_KEY is required for the Flagsmith client")
         sdk = Flagsmith(
@@ -105,7 +105,7 @@ class FlagsmithExperimentClient:
             enable_events=True,
             default_flag_handler=_control_flag,
         )
-        return cls(sdk, settings.sa_flag_name)
+        return cls(sdk, flag_name or settings.sa_flag_name)
 
     def reachable(self) -> bool:
         """Whether Flagsmith answers an environment flags request and serves the flag.
