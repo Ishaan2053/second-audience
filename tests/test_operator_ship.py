@@ -70,7 +70,9 @@ GUARDRAIL_HIT = {**WIN, WRONG: (0.8, 0.2, 1.4, 0.01)}
 
 
 def results_json(
-    n: int = 75, inference: dict[int, tuple[float, float, float, float]] | None = None
+    n: int = 75,
+    inference: dict[int, tuple[float, float, float, float]] | None = None,
+    as_of: str = "2026-11-27T05:00:00Z",
 ) -> dict[str, Any]:
     """A results payload (docs/spike-findings.md, question 5) with `n` exposed per arm."""
     inference = inference or {}
@@ -95,21 +97,22 @@ def results_json(
         )
     return {
         "results": {
-            "as_of": "2026-11-27T05:00:00Z",
+            "as_of": as_of,
             "is_final": False,
             "payload": {"srm_p_value": None, "metrics": metrics},
         }
     }
 
 
-def analysis_for(raw: dict[str, Any], tmp_path: Path) -> Analysis:
+def analysis_for(raw: dict[str, Any], tmp_path: Path, now: datetime = NOW) -> Analysis:
     path = tmp_path / "state.json"
     path.write_text(json.dumps(STATE), encoding="utf-8")
     spec, state = load_spec(SPEC_SOURCE), RunState.load(path)
-    return analyse(spec, state, ExperimentResults.from_api(raw), {}, [], NOW)
+    return analyse(spec, state, ExperimentResults.from_api(raw), {}, [], now)
 
 
 RUNNING = {"id": 680, "status": "running"}
+OLD = "2026-11-26T12:00:00Z"  # 18 hours before NOW
 
 
 # --- the plan -------------------------------------------------------------------------------
@@ -146,13 +149,64 @@ def test_plan_refuses_before_the_stopping_rule(tmp_path: Path) -> None:
         plan_ship(analysis, RUNNING, Path("r.json"))
 
 
-def test_plan_refuses_an_ended_experiment(tmp_path: Path) -> None:
+def test_plan_refuses_an_experiment_that_ended_otherwise(tmp_path: Path) -> None:
     analysis = analysis_for(results_json(inference=WIN), tmp_path)
-    ended = {"status": "completed", "ended_at": "x", "rollout_decision": "variant"}
-    with pytest.raises(ShipRefusedError, match="already ended"):
-        plan_ship(analysis, ended, Path("r.json"))
+    for ended in (
+        {"status": "completed", "ended_at": "x", "rollout_decision": "control"},
+        {"status": "completed", "rollout_decision": "variant", "rollout_variant": 99},
+        {"status": "completed", "rollout_decision": "variant", "rollout_variant": {"x": 1}},
+    ):
+        with pytest.raises(ShipRefusedError, match=r"already ended.*not this plan's 'variant'"):
+            plan_ship(analysis, ended, Path("r.json"))
     with pytest.raises(ShipRefusedError, match="not running"):
         plan_ship(analysis, {"status": "created"}, Path("r.json"))
+    early = analysis_for(results_json(n=40, inference=WIN), tmp_path)
+    ended = {"status": "completed", "rollout_decision": "variant"}
+    with pytest.raises(ShipRefusedError, match=r"already ended.*stopping rule is not met"):
+        plan_ship(early, ended, Path("r.json"))
+
+
+@pytest.mark.parametrize("variant", [None, VARIANT_ID, {"id": VARIANT_ID}])
+def test_plan_records_only_an_experiment_that_ended_as_planned(
+    tmp_path: Path, variant: Any
+) -> None:
+    analysis = analysis_for(results_json(inference=WIN), tmp_path)
+    ended = {"status": "completed", "rollout_decision": "variant", "rollout_variant": variant}
+    plan = plan_ship(analysis, ended, Path("r.json"))
+    assert plan.record_only
+    assert plan.changes() == [
+        "none: experiment error-style-v1 already ended with rollout_decision 'variant', as "
+        "planned; complete/ is not called again. This run reads back, smoke-tests and records "
+        "the decision."
+    ]
+
+
+def test_fresh_results_give_no_warning(tmp_path: Path) -> None:
+    plan = plan_ship(analysis_for(results_json(inference=WIN), tmp_path), RUNNING, Path("r"))
+    assert plan.warnings == ()
+
+
+def test_old_results_are_flagged(tmp_path: Path) -> None:
+    later = datetime(2026, 11, 27, 11, 1, tzinfo=UTC)  # 6 h 1 min after as_of
+    analysis = analysis_for(results_json(inference=WIN), tmp_path, later)
+    assert plan_ship(analysis, RUNNING, Path("r")).warnings == (
+        "the saved results are 6.0 hours old (as of 2026-11-27T05:00:00+00:00), older than 6 hours",
+    )
+
+
+def test_results_from_before_the_hard_end_are_flagged_when_only_time_met_the_rule(
+    tmp_path: Path,
+) -> None:
+    after_end = datetime(2026, 11, 29, 7, 0, tzinfo=UTC)  # hard end 06:30 UTC
+    before = results_json(n=40, inference=WIN, as_of="2026-11-29T06:00:00Z")
+    plan = plan_ship(analysis_for(before, tmp_path, after_end), RUNNING, Path("r"))
+    assert len(plan.warnings) == 1
+    assert "met only because the hard end" in plan.warnings[0]
+    assert "run `sa report error-style-v1`" in plan.warnings[0]
+    after = results_json(n=40, inference=WIN, as_of="2026-11-29T06:45:00Z")
+    assert plan_ship(analysis_for(after, tmp_path, after_end), RUNNING, Path("r")).warnings == ()
+    full = results_json(inference=WIN, as_of="2026-11-29T06:00:00Z")  # enrolment met the rule
+    assert plan_ship(analysis_for(full, tmp_path, after_end), RUNNING, Path("r")).warnings == ()
 
 
 # --- reading back -----------------------------------------------------------------------------
@@ -173,6 +227,15 @@ def test_served_value_reads_a_full_rollout_the_default_or_a_split() -> None:
     assert served_value(_feature_state("default", 100.0), options) == "variant"
     assert served_value(_feature_state("default", 0.0), options) == "default"
     assert served_value(_feature_state("default", 50.0), options) is None
+
+
+def test_served_value_reads_a_nested_option() -> None:
+    state = _feature_state("default", 100.0)
+    state["multivariate_feature_state_values"][0]["multivariate_feature_option"] = {
+        "id": VARIANT_ID,
+        "value": "variant",
+    }
+    assert served_value(state, {VARIANT_ID: "variant"}) == "variant"
 
 
 class FakeAdmin(FlagsmithAdmin):
@@ -234,6 +297,16 @@ def test_read_back_reports_what_does_not_match(tmp_path: Path) -> None:
     read_back(plan, admin, outcome)
     assert len(outcome.problems) == 3  # status, rollout_decision, served value
     assert not outcome.smoke_safe
+
+
+def test_unreadable_feature_state_is_a_problem_not_an_exception(tmp_path: Path) -> None:
+    plan = plan_ship(analysis_for(results_json(inference=WIN), tmp_path), RUNNING, Path("r"))
+    admin = FakeAdmin(results_json(inference=WIN))
+    outcome = complete(plan, admin)
+    admin.state = {"enabled": True, "multivariate_feature_state_values": [{"id": 5}]}
+    read_back(plan, admin, outcome)
+    assert outcome.problems == ["read-back failed: KeyError: 'multivariate_feature_option'"]
+    assert outcome.smoke_safe  # the experiment itself was read back as completed
 
 
 @pytest.mark.parametrize(
@@ -469,7 +542,9 @@ def test_ship_ends_verifies_and_records(tmp_path: Path, monkeypatch: pytest.Monk
     assert json.loads(first.detail)["verification"] == "pending"
     assert (row.action, row.experiment_slug, row.approved_by) == ("ship_verify", SLUG, "dev")
     detail = json.loads(row.detail)
-    assert detail["verification"] == "done"
+    assert detail["verification"] == "finished"
+    assert detail["record_only"] is False
+    assert detail["warnings"] == []
     assert detail["decision"] == "ship_variant"
     assert detail["inference"]["Tool calls per session"]["chance_to_win"] == 0.99
     assert detail["served_value"] == ARM_FLAG_VALUES["prescriptive"]
@@ -504,6 +579,7 @@ def test_failed_verification_is_recorded_and_exits_non_zero(
     assert workspace.smokes == SMOKE_ATTEMPTS
     _, row = workspace.audit_rows()
     assert json.loads(row.detail)["problems"]
+    assert json.loads(row.detail)["verification"] == "failed"
 
 
 def test_read_back_failure_after_completion_is_recorded_and_skips_the_smoke(
@@ -570,13 +646,98 @@ def test_dry_run_shows_guardrail_ledger_counts_without_inference(
     assert "prescriptive wrong bookings on trap scenarios (ledger): 0 (none)" in result.output
 
 
-def test_ship_refuses_an_ended_experiment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ship_refuses_an_experiment_that_ended_otherwise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
     workspace.admin.experiment.update(status="completed", rollout_decision="control")
     result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
     assert result.exit_code == 1
     assert "already ended" in result.output
     assert workspace.unchanged()
+
+
+def test_rerun_after_an_unrecorded_completion_records_without_ending_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+    workspace.admin.complete_experiment(ENV, 680, "variant", VARIANT_ID)  # an earlier run
+    workspace.admin.changes.clear()
+    result = invoke("ship", SLUG, answer=f"{SLUG}\n")
+    assert result.exit_code == 1
+    assert "confirmation did not match" in result.output
+    assert workspace.unchanged()
+    result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
+    assert result.exit_code == 0, result.output
+    assert "record this decision for the experiment that has already ended" in result.output
+    assert workspace.admin.changes == []  # complete/ was not called again
+    assert workspace.smokes == 1
+    first, row = workspace.audit_rows()
+    assert (first.action, row.action) == ("ship", "ship_verify")
+    detail = json.loads(row.detail)
+    assert (detail["record_only"], detail["verification"]) == (True, "finished")
+    record = (workspace.folder / "decision.md").read_text(encoding="utf-8")
+    assert "without calling complete/ again" in record
+    assert "Verified: experiment ended" in record
+
+
+def test_failed_complete_call_is_audited_as_an_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+
+    def broken(*args: Any) -> dict[str, Any]:
+        raise FlagsmithAdminError(["api", "complete"], "timed out")
+
+    monkeypatch.setattr(workspace.admin, "complete_experiment", broken)
+    result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
+    assert result.exit_code == 1
+    assert "the complete/ call failed" in result.output
+    assert "audit log (ship_attempt)" in result.output
+    (row,) = workspace.audit_rows()
+    assert (row.action, row.approved_by) == ("ship_attempt", "dev")
+    detail = json.loads(row.detail)
+    assert detail["decision"] == "ship_variant"
+    assert (detail["rollout_decision"], detail["rollout_variant"]) == ("variant", VARIANT_ID)
+    assert "timed out" in detail["error"]
+    assert not (workspace.folder / "decision.md").exists()
+    assert workspace.smokes == 0
+
+
+def test_stale_results_are_warned_in_the_plan_and_kept_in_the_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN, as_of=OLD))
+    result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
+    assert result.exit_code == 0, result.output
+    assert "Warning: the saved results are 18.0 hours old" in result.output
+    _, row = workspace.audit_rows()
+    assert json.loads(row.detail)["warnings"][0].startswith("the saved results are 18.0 hours")
+    record = (workspace.folder / "decision.md").read_text(encoding="utf-8")
+    assert "- **Warning:** the saved results are 18.0 hours old" in record
+
+
+def test_unexpected_feature_state_after_completion_is_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = Workspace(tmp_path, monkeypatch, results_json(inference=WIN))
+    original = workspace.admin.complete_experiment
+
+    def complete_then_odd_state(*args: Any) -> dict[str, Any]:
+        answer = original(*args)
+        workspace.admin.state = {"enabled": True, "multivariate_feature_state_values": [{}]}
+        return answer
+
+    monkeypatch.setattr(workspace.admin, "complete_experiment", complete_then_odd_state)
+    result = invoke("ship", SLUG, answer=f"ship {SLUG}\n")
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)  # recorded, not a traceback
+    first, row = workspace.audit_rows()
+    assert (first.action, row.action) == ("ship", "ship_verify")
+    detail = json.loads(row.detail)
+    assert detail["problems"][0] == "read-back failed: KeyError: 'multivariate_feature_option'"
+    assert detail["verification"] == "failed"
+    assert workspace.smokes == 1  # the experiment read back completed, so the smoke still ran
 
 
 def test_report_keeps_the_decision_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -592,6 +753,8 @@ def test_report_keeps_the_decision_record(tmp_path: Path, monkeypatch: pytest.Mo
     assert result.exit_code == 0, result.output
     report = (workspace.folder / "report.md").read_text(encoding="utf-8")
     assert "## 9. Decision" in report
+    assert "The record below is the decision recorded at ship" in report
+    assert "Decision recorded at ship from results `" in report
     assert report.rstrip().endswith(
         "- Verified: experiment ended, flag value and served style match."
     )

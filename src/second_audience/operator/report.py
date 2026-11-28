@@ -337,7 +337,14 @@ def render(
     for section in sections:
         lines += [*section(), ""]
     if shipped is not None:
-        lines += [shipped.rstrip("\n"), ""]
+        lines += [
+            f"Sections 1 to 9 use `{results_file}`. The record below is the decision recorded "
+            "at ship from the results it names, and is the one applied; if section 9 differs, "
+            "it is because those results have since been refreshed.",
+            "",
+            shipped.rstrip("\n"),
+            "",
+        ]
     return "\n".join(lines)
 
 

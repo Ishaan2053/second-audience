@@ -78,8 +78,11 @@ class RunState:
 
 
 def ship_smoke(record: SessionRecord) -> bool:
-    """A smoke session run by `sa ship`; excluded from every analysis and from evidence."""
-    return record.agent_label == SMOKE_AGENT_LABEL
+    """A smoke session run by `sa ship`; excluded from every analysis and from evidence.
+
+    Lab traffic only: a field client that names itself `sa-ship-smoke` is still counted.
+    """
+    return record.agent_label == SMOKE_AGENT_LABEL and record.source == "lab"
 
 
 def in_experiment(record: SessionRecord) -> bool:
