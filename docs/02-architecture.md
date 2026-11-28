@@ -123,9 +123,9 @@ must be set explicitly.
 | `SA_OPERATOR_MODEL` | operator | Gemini model that drafts the prose of `sa report` and the proposals of `sa propose`, default `gemini-3.5-flash-lite` |
 | `SA_MAX_TOOL_CALLS` | server | per-session budget, default 12 |
 | `SA_SESSION_IDLE_SECONDS` | server | default 600 |
-| `SA_FIELD_SESSIONS_PER_IP_PER_HOUR` | server | new field sessions per client IP per sliding hour, default 10 |
-| `SA_FIELD_ENABLED` | server | kill switch; `false` refuses new field sessions, lab sessions still work; default `true` |
-| `SA_MAX_CONCURRENT_SESSIONS` | server | open sessions (lab and field) above which field `begin_task` is refused, default 50 |
+| `SA_FIELD_SESSIONS_PER_IP_PER_HOUR` | server | new field sessions per client IP per sliding hour, default 10; fallback for the `field_limits` flag (section 3.9) |
+| `SA_FIELD_ENABLED` | server | kill switch; `false` refuses new field sessions, lab sessions still work; default `true`; fallback for the `field_enabled` flag |
+| `SA_MAX_CONCURRENT_SESSIONS` | server | open sessions (lab and field) above which field `begin_task` is refused, default 50; fallback for the `field_limits` flag |
 | `SA_TRUST_PROXY` | server | take the client IP from `X-Forwarded-For`; `true` only behind the host's proxy; default `false` |
 | `SA_GIT_COMMIT` | server | commit hash shown at `/healthz`, set by the host or the Docker build |
 
@@ -688,7 +688,7 @@ Protection: per-IP session rate limit, per-session call budget, idle timeout, a 
 concurrent sessions, and no personal data in the ledger (IP stored only as a salted hash).
 
 The limits live in `booking/limits.py` and apply only to field `begin_task` calls; lab sessions
-are exempt. In order: the kill switch (`SA_FIELD_ENABLED=false` returns `FIELD_CLOSED`), the
+are exempt. In order: the kill switch (`field_enabled` off returns `FIELD_CLOSED`), the
 cap on open sessions, lab and field together (`SERVER_BUSY`, retry after 60 s), and a sliding
 one-hour window per IP hash (`RATE_LIMITED`, with the seconds until a slot frees). A refused
 call returns a plain error with `retry_after_seconds` where a retry can help; it creates no
@@ -699,8 +699,23 @@ The client IP is the socket peer, or the first valid `X-Forwarded-For` entry whe
 `SA_LAB_KEY` (random per process without one), truncated to 32 hex characters. Uvicorn's
 access log is off, because it prints client addresses.
 
+**Operational controls (SA-20).** The kill switch and the two limits are Flagsmith flags, read
+by `core/controls.py` on each field admission, so they change without a restart:
+`field_enabled` (standard flag; its on/off state is the switch) and `field_limits` (remote
+config, a JSON string `{"sessions_per_ip_per_hour": 10, "max_concurrent_sessions": 50}`,
+validated with pydantic, unknown keys rejected). They are environment-level reads with no
+identity, so they create no identities, exposures or events and do not touch `error_style`.
+`Controls.get()` caches the values for 60 seconds, so a change applies within about a minute
+and Flagsmith sees at most one request a minute from the server. Each value falls back to its
+`Settings` counterpart (`SA_FIELD_ENABLED`, `SA_FIELD_SESSIONS_PER_IP_PER_HOUR`,
+`SA_MAX_CONCURRENT_SESSIONS`) when Flagsmith is unreachable, the flag is missing, or
+`field_limits` is malformed or disabled; a failed read is cached for the same 60 seconds.
+Without `FLAGSMITH_ENVIRONMENT_KEY` only the settings apply. A changed per-IP limit applies to
+the existing sliding window.
+
 `GET /healthz` returns `status` (`ok`, or `degraded` if a dependency check failed), `commit`
-(`SA_GIT_COMMIT`), `active_sessions`, `field_enabled`, `checks` (`database`, `flagsmith`;
+(`SA_GIT_COMMIT`), `active_sessions`, `controls` (the values in force, with
+`source.field_enabled` and `source.limits`, each `flagsmith` or `settings`), `checks` (`database`, `flagsmith`;
 `null` when not configured) and `checked_at`. The checks are cached for 30 seconds. It
 answers 200 even when degraded, because the server keeps working without Flagsmith (control
 style) and a host should not restart it for that. `GET /` is the static page

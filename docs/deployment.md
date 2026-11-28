@@ -72,7 +72,7 @@ setting keeps its default from `second_audience.config.Settings`.
 |---|---|---|
 | `SA_ENV` | `prod` | `render.yaml` |
 | `SA_TRUST_PROXY` | `true` (Render's proxy sets `X-Forwarded-For`) | `render.yaml` |
-| `SA_FIELD_ENABLED` | `true` | Dashboard (kill switch, section 5) |
+| `SA_FIELD_ENABLED` | `true` | Dashboard (fallback for the `field_enabled` flag, section 5) |
 | `FLAGSMITH_ENVIRONMENT_KEY` | Production **server-side** key (`ser.…`) | Dashboard |
 | `SA_DATABASE_URL` | Supabase **session pooler** URI, `postgresql+psycopg://postgres.<ref>:<password>@aws-<n>-<region>.pooler.supabase.com:5432/postgres?sslmode=require` | Dashboard |
 | `SA_LAB_KEY` | Same value as the developer's local `.env` (lab sessions and the IP-hash salt) | Dashboard |
@@ -119,10 +119,30 @@ once at start, so a change applies only after the deploy finishes. Values declar
 `value:` in `render.yaml` (`SA_ENV`, `SA_TRUST_PROXY`) are changed in the file, not the
 Dashboard, or the next Blueprint sync reverts them.
 
-**Disable field sessions quickly.** Set `SA_FIELD_ENABLED=false` and **Save and deploy**. New
-public sessions get `FIELD_CLOSED`; open sessions finish; lab sessions still work. For an
-immediate stop of everything, **Settings > Suspend Web Service** (resume later from the same
-page).
+**Disable field sessions quickly.** One command, no redeploy (needs `flagsmith login`):
+
+```powershell
+flagsmith flag disable field_enabled -p second-audience -e Ek4jqbHfVQuaQ4Gi6vzkhs --yes
+```
+
+Within about a minute (the server caches the controls for 60 s) new public sessions get
+`FIELD_CLOSED`; open sessions finish; lab sessions still work. Turn them back on with
+`flagsmith flag enable field_enabled -p second-audience -e Ek4jqbHfVQuaQ4Gi6vzkhs --yes`.
+`/healthz` shows the value in force under `controls`. If Flagsmith itself is unreachable the
+server uses `SA_FIELD_ENABLED`, so the slow fallback is still to set `SA_FIELD_ENABLED=false`
+and **Save and deploy**. For an immediate stop of everything, **Settings > Suspend Web
+Service** (resume later from the same page).
+
+**Change the field limits.** Also without a redeploy:
+
+```powershell
+flagsmith flag update field_limits -p second-audience -e Ek4jqbHfVQuaQ4Gi6vzkhs --type string --yes --value '{"sessions_per_ip_per_hour": 10, "max_concurrent_sessions": 50}'
+```
+
+Both keys are required and must be positive integers. A malformed value, or disabling the
+flag, makes the server use `SA_FIELD_SESSIONS_PER_IP_PER_HOUR` and
+`SA_MAX_CONCURRENT_SESSIONS` (logged as a warning, and shown as `"limits": "settings"` at
+`/healthz`). Section 10 records how the flags were created.
 
 **Read logs.** Service, **Logs**, or with the Render CLI:
 
@@ -215,3 +235,31 @@ Any client that supports streamable HTTP works the same way: the URL is the only
   session in the ledger.
 - Not yet checked: field sessions from two different networks get different
   `client_ip_hash` values (section 8, step 4).
+
+## 10. Operational control flags (SA-20)
+
+The kill switch and the field limits are Flagsmith flags, so changing them needs no restart
+(`docs/02-architecture.md`, section 3.9). They were created on 2026-11-28 with the
+`flagsmith` CLI. `feature create` creates a feature for the whole project, so one command
+per flag set the same default in Production and Development:
+
+```powershell
+flagsmith feature create field_enabled -p second-audience --enabled --description "Kill switch for public (field) sessions on the booking server. Off refuses new field sessions; lab sessions are unaffected. Read by second_audience.core.controls (SA-20)."
+flagsmith feature create field_limits -p second-audience --enabled --value '{"sessions_per_ip_per_hour": 10, "max_concurrent_sessions": 50}' --description "Remote config JSON for public (field) session limits on the booking server. Disabled or malformed means the server's SA_* settings apply. Read by second_audience.core.controls (SA-20)."
+```
+
+Both defaults equal the settings defaults, so creating them changed nothing for the running
+service. Environment keys: Production `Ek4jqbHfVQuaQ4Gi6vzkhs`, Development
+`JDfxGiKY3RS8ByAPE4CVCP` (client-side keys, as `flagsmith environment list` prints them).
+Check the state with `flagsmith flag list -p second-audience -e <key>`. Write commands
+(`flag enable`, `flag disable`, `flag update`) need `--yes` when run without an interactive
+terminal.
+
+**Request volume.** The server reads both flags in one environment-flags request, at most
+once per 60 seconds, and only when a field `begin_task` or `/healthz` needs them. The upper
+bound is 1,440 requests a day (about 44,600 in a 31-day month) if something asked every
+minute without pause. The expected volume is far lower: the keep-alive pings `/healthz`
+every 10 minutes (about 4,500 a month), plus at most one more read in each minute in which
+field sessions begin. This comes on top of the existing `/healthz` Flagsmith probe (cached
+30 s) and the experiment's identity requests, against the free plan's 50,000 requests a
+month.

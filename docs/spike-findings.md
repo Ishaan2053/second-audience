@@ -732,3 +732,32 @@ copied error-style-v1's arms and metrics, with `min_exposed_per_arm: 3`; each ex
   ... gets the control style outside the experiment"). So a streak of good
   `get_identity_flags` probes does not prove that every edge node serves the new feature to
   `get_experiment_flag`.
+
+## Operational control flags (SA-20)
+
+Run on 2026-11-28 against a local server (port 8767, SQLite ledger, its own lab key) reading
+the **Development** environment's flags. Production was only touched by the two
+`feature create` commands, which add a feature to every environment; `error_style` and
+experiment 680 were not touched.
+
+- **Propagation is about a minute, as designed.** `flagsmith flag disable field_enabled` at
+  12:03:01 UTC; the server returned `FIELD_CLOSED` from the probe at 12:03:50 (49 s, inside
+  the 60 s cache), and a lab `begin_task` straight after still got a session. Re-enabling
+  and raising `field_limits` to 20 per IP at 12:04:00 applied at 12:04:53. A malformed
+  `field_limits` set at 12:05:00 showed `"limits": "settings"` at 12:05:56, with the warning
+  `flag field_limits is malformed; using settings`. Flagsmith's edge served each change
+  within the cache window; no extra delay was visible.
+- **Unreachable Flagsmith** (`FLAGSMITH_API_URL=http://127.0.0.1:9/api/v1/`,
+  `SA_FIELD_SESSIONS_PER_IP_PER_HOUR=3`): `/healthz` showed the settings values with both
+  sources `settings`, and the fourth field session was `RATE_LIMITED`. The read took about
+  6 s (2 s timeout, one retry, each attempt about 2 s more), once per 60 s, and it holds the
+  admission lock, so a field `begin_task` can wait that long once a minute during an
+  outage. Lab sessions do not go through the gate.
+- **CLI writes need `--yes` without a terminal.** `flagsmith flag disable` from a
+  non-interactive shell fails with `pass --yes to confirm ...` and changes nothing.
+- **A JSON value needs `--type string`** on `flag update`, so the CLI does not try to infer
+  a type; the SDK then serves it as a string, which `Controls` parses.
+- **The SDK without a default flag handler raises** on a failed environment-flags request
+  (`FlagsmithAPIError`) and on a missing feature (`FlagsmithFeatureDoesNotExistError`). The
+  controls client uses its own SDK instance without one, so a failure cannot be mistaken
+  for flag values. The experiment client keeps its control-style handler.
