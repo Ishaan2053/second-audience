@@ -290,9 +290,11 @@ through it:
   CLI v2 and `flagsmith api` ([`operator/flagsmith_admin.py`](src/second_audience/operator/flagsmith_admin.py)),
   including `experiments/<id>/complete/` to end the experiment and roll out the decision,
   verified live on Development in the setup spike ([`docs/spike-findings.md`](docs/spike-findings.md)).
-- **Screenshots:** the flag, the experiment setup, the exposures panel and the results page
-  are in [`docs/RESULTS.md`](docs/RESULTS.md#flagsmith-screenshots) [SA-17 PLACEHOLDER:
-  screenshots].
+- **Screenshots:** the flag, the experiment setup, the metrics, the exposures panel and the
+  interim results view are in [`docs/RESULTS.md`](docs/RESULTS.md#flagsmith-screenshots)
+  [SA-17 PLACEHOLDER: results page at the final cut-off].
+
+  ![Experiment error-style-v1 in Flagsmith](docs/img/flagsmith-experiment-setup.png)
 
 ## Impact
 

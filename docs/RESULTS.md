@@ -186,14 +186,37 @@ Sessions that never hit a styled error are not exposed and are not part of the c
 
 ## Flagsmith screenshots
 
-Taken by the developer from the Flagsmith dashboard (project `second-audience`, environment
-`production`) and stored in `docs/img/`. Each will be embedded here at SA-17:
+Taken from the Flagsmith dashboard (project `second-audience`, environment `production`) on
+2026-11-28, while the experiment was running, and stored in `docs/img/`. The results page at
+the final cut-off is added at SA-17.
 
-| File | What it shows | Referenced from |
-|---|---|---|
-| `docs/img/flagsmith-flag.png` | The `error_style` multivariate flag: control value and the `prescriptive` variant value | here; README "Use of Flagsmith" |
-| `docs/img/flagsmith-experiment-setup.png` | Experiment `error-style-v1` (680): arms, 50/50 split, the three metrics with roles and directions | here; README "Use of Flagsmith" |
-| `docs/img/flagsmith-exposures.png` | The experiment's exposures panel: exposed identities per arm | here; README "Use of Flagsmith" |
-| `docs/img/flagsmith-results.png` | The results page at the cut-off: per-metric lift, credible intervals and win probability | here; README "Use of Flagsmith" and "What we tested" |
+**The flag.** `error_style` holds each arm as a JSON style value: the control value and the
+`prescriptive` variant. Flagsmith locks editing while the experiment runs.
 
-[SA-17 PLACEHOLDER: embed the four screenshots above]
+![The error_style flag with its control value and the prescriptive variant](img/flagsmith-flag.png)
+
+**The experiment.** `error-style-v1` (680): the hypothesis, the linked flag, the primary
+metric with its direction ("should decrease") and the 50/50 split.
+
+![Experiment error-style-v1: hypothesis, flag, primary metric and the 50/50 split](img/flagsmith-experiment-setup.png)
+
+**The metrics.** The primary metric (mean of `task_finished`) and the two guardrails
+(occurrence of `task_completed` and of `task_wrong_booking`), computed from Flagsmith's
+warehouse.
+
+![The three metrics: tool calls per session, task completed correctly, wrong booking](img/flagsmith-metrics.png)
+
+**Exposures.** The analysis table shows the computed results (as of 2026-11-26 18:02 UTC,
+the same 23 and 25 exposures as the report). The enrolment chart below it was computed on
+2026-11-28 10:58 UTC and already includes that day's lab sessions (43 and 40). Inference is
+still empty: Flagsmith needs 50 identities and 5 conversions per arm.
+
+![Interim analysis table and enrolment over time](img/flagsmith-exposures.png)
+
+**Interim results view.** The same page further up: users enrolled 48, no winning variation,
+chance to be best or lift yet.
+
+![Interim results summary and analysis table](img/flagsmith-results-interim.png)
+
+[SA-17 PLACEHOLDER: `docs/img/flagsmith-results.png`, the results page at the final cut-off
+(per-metric lift, credible intervals and win probability)]
