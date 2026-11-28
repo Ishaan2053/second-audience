@@ -288,6 +288,17 @@ def test_invented_count_is_rejected_even_inside_a_session_id(evidence: Evidence)
     assert validate(answer(**cited, rationale=fine), tweaked).spec.slug == NEW_SLUG
 
 
+def test_model_labels_and_the_proposals_own_names_are_not_numbers(evidence: Evidence) -> None:
+    model = "gemini-3.5-flash-lite"
+    tweaked = replace(evidence, sessions=[{**s, "model": model} for s in evidence.sessions])
+    names = {"slug": "error-style-v7", "variant_key": "note_v3"}
+    prose = f"In {sid(3)}, {model} copied the call; error-style-v7 adds note_v3 to it."
+    assert "3.5" not in json.dumps(tweaked.figures())  # so the label alone would fail
+    assert validate(answer(**names, rationale=prose), tweaked).spec.slug == "error-style-v7"
+    with pytest.raises(ProposalRejectedError, match=r"numbers not in the evidence: \['17'\]"):
+        validate(answer(**names, rationale=f"{prose} {model} gave up 17 times."), tweaked)
+
+
 def test_transcript_arguments_are_not_a_source_of_numbers(evidence: Evidence) -> None:
     # 18 occurs only in the transcripts' arguments (date 2027-03-18), never in a figure.
     assert "18" in json.dumps(evidence.pack())
