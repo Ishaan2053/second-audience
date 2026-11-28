@@ -114,7 +114,8 @@ def test_ledger_records_the_first_exposure_only() -> None:
     assert row.exposed_at is not None
 
 
-def test_from_settings_is_offline_without_a_key() -> None:
+def test_from_settings_is_offline_without_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FLAGSMITH_ENVIRONMENT_KEY", raising=False)
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
     sa = SecondAudience.from_settings(settings, flag_name="any_flag")
     assert sa.variant("s-1") == CONTROL

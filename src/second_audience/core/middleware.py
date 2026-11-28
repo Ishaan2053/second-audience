@@ -30,10 +30,12 @@ from second_audience.core.styles import ErrorStyle
 logger = logging.getLogger(__name__)
 
 
-def experiment_client_from_settings(
-    settings: Settings, flag_name: str | None = None
-) -> ExperimentClient:
-    """The Flagsmith client for `flag_name`, or an offline control-style client without a key."""
+def experiment_client_from_settings(settings: Settings, flag_name: str) -> ExperimentClient:
+    """The Flagsmith client for `flag_name`, or an offline control-style client without a key.
+
+    `flag_name` is required so a public-API user is never enrolled in the booking server's
+    experiment (`SA_FLAG_NAME`) by default.
+    """
     if settings.flagsmith_environment_key is None:
         logger.warning(
             "FLAGSMITH_ENVIRONMENT_KEY is not set: every session gets the control style "
@@ -69,7 +71,7 @@ class SecondAudience:
         cls,
         settings: Settings | None = None,
         *,
-        flag_name: str | None = None,
+        flag_name: str,
         ledger: Ledger | None = None,
     ) -> Self:
         """Build on Flagsmith when `FLAGSMITH_ENVIRONMENT_KEY` is set, offline otherwise."""
