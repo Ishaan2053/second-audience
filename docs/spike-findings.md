@@ -778,3 +778,56 @@ Checked 2026-11-28 with read-only `flagsmith api` calls.
   `SA_WEBHOOK_TOKEN` is used as that secret and the path stays fixed.
 - **Slack and GitHub integration endpoints answer 200** on the free plan (empty lists);
   both still need an OAuth sign-in in the dashboard.
+
+## Per-model rollout on Development (SA-21)
+
+Run on 2026-11-28 against **Development** only, from a local clone with its own settings (the
+Development server key read in-process, a SQLite ledger, a local server on port 8768, no
+`.env`). Production, experiment 680 and `error_style` were not touched; the only
+project-wide side effects were the throwaway flags and segments below, which existed in
+the project while the run lasted and were then deleted.
+
+- **Plan availability.** Segments and segment overrides work on the free plan.
+  `get-subscription-metadata` reports `max_seats 1`, `max_api_calls 50000`, `max_projects 1`
+  and no segment limit; the pricing page lists unlimited segments on Free. Both the probe
+  and the rehearsal created a segment and an override without a plan error.
+- **Segment rules through the CLI.** `flagsmith segment create <name> --rules <json>` takes
+  **one rule object** (`{"type": "ALL", "rules": [...]}`); a list fails with `cannot
+  unmarshal array into Go value of type api.SegmentRule`. An `IN` condition sent as
+  `"a,b"` is stored and returned as a list `["a", "b"]`. Segments belong to the project, so
+  a segment is inert in an environment until an override there uses it.
+- **Segment override through the CLI.** `flagsmith flag update <flag> --segment <id>
+  --enable --value <json> --type string --weight <key>=0 --yes -e <env>` creates the
+  override when the segment has none, and `flag get <flag> --segment <id>` reads it back:
+  `enabled`, `value`, `priority` and `variants` (each with `id`, `key`, `value`,
+  `weight`). With every weight at 0 the override serves its own value. The CLI's "✓" lines go
+  to stderr, so `--json` stdout stays parseable.
+- **Traits on the same call are enough.** On a probe flag with an override for
+  `agent_label IN [probe-model-a, probe-model-b]`, a new identity sent with
+  `agent_label=probe-model-a` got the override's value from both `get_identity_flags` and
+  `get_experiment_flag` on its first request; `probe-model-c` and an identity with no
+  traits got the default. No separate identify call is needed, so the server needs no change.
+  (`get_experiment_flag` needs `enable_events=True` on the SDK, which the server already
+  sets.)
+- **Full rehearsal.** `sa start` created and started experiment 1670 on a throwaway flag
+  `sa21_rehearsal_style`, then 140 scripted lab sessions ran under two synthetic labels
+  (`rehearsal-helped`: aligned scenarios, books only when the error carries a corrected call;
+  `rehearsal-harmed`: trap scenarios, applies the corrected call). `sa ship` decided
+  `keep_control` and ended the experiment with `control`. Then:
+  - `sa ship sa21-rehearsal --per-model --dry-run` while the experiment was still running
+    was refused ("the flag is locked while it runs"); after `sa ship` it printed the table
+    (helped: control 0/41 correct, prescriptive 39/39; harmed: control 23/23, prescriptive
+    0/37 with 37 wrong bookings), the rule and the planned segment, and created nothing
+    (`segment list` empty).
+  - A wrong confirmation (`ship sa21-rehearsal`) aborted with nothing created.
+  - The typed `ship sa21-rehearsal per-model` created segment `sa-sa21-rehearsal-rollout`
+    (`agent_label IN [rehearsal-helped]`) and the override, read both back, and the smoke
+    sessions were served prescriptive for `rehearsal-helped` and control for
+    `rehearsal-harmed`, each on the first probe (6 s after the change), with the server
+    still running from before the change. Exit 0, one `ship_per_model` audit row, no
+    problems. Both smoke sessions have `variant` null and `in_experiment` false.
+  - A dry run afterwards planned to reuse the matching segment. `sa report --no-llm`
+    re-rendered the report with the Decision record and then the per-model record.
+- **Cleanup.** The segment, the flag (which deletes experiment 1670) and the three Development
+  metrics `sa start` created were deleted; `segment list` is empty and the feature list is
+  back to `error_style`, `field_enabled`, `field_limits`.

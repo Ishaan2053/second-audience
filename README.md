@@ -142,6 +142,7 @@ Numbers in its output always come from code, never from the model.
 | `sa report <slug>` | Refreshes and saves Flagsmith results, reconciles with the ledger, writes the report | yes: results refresh request only | reviews the report |
 | `sa propose` | Drafts the next experiment from the ledger's failing sessions | no, writes local files only | edits the draft spec, moves it to `experiments/<slug>.yaml`, adds it to `HYPOTHESIS.md`, commits both |
 | `sa ship <slug>` | Applies the pre-registered decision rule, ends the experiment, rolls out the decision, verifies it | yes | **types `ship <slug>` to approve** |
+| `sa ship <slug> --per-model` | After the experiment has ended with control, serves the variant only to the models it helped (segment on `agent_label`); exploratory | yes | **types `ship <slug> per-model` to approve** |
 
 Real output excerpts (Production, experiment 680):
 
