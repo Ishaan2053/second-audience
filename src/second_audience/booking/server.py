@@ -26,11 +26,18 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
 from second_audience.booking.health import HealthMonitor, Probe
-from second_audience.booking.limits import FieldGate, client_ip, hash_ip, ip_salt
+from second_audience.booking.limits import (
+    ControlSource,
+    FieldGate,
+    client_ip,
+    hash_ip,
+    ip_salt,
+)
 from second_audience.booking.sessions import SessionManager, identify
 from second_audience.booking.suggestions import BOOK_ROOM, RESCHEDULE_BOOKING
 from second_audience.booking.world import Booking, BookingRequest, Room, format_time, parse_time
 from second_audience.config import Settings, get_settings
+from second_audience.core.controls import Controls
 from second_audience.core.experiment import (
     ExperimentClient,
     FlagsmithExperimentClient,
@@ -136,20 +143,23 @@ async def _sweep_idle(manager: SessionManager, interval: float) -> None:
 
 
 def build_server(
-    manager: SessionManager, settings: Settings, probes: Mapping[str, Probe | None] | None = None
+    manager: SessionManager,
+    settings: Settings,
+    probes: Mapping[str, Probe | None] | None = None,
+    controls: ControlSource | None = None,
 ) -> FastMCP:
     """Create the FastMCP app with the seven booking tools, bound to `manager`.
 
-    `probes` are the dependency checks `/healthz` reports, by name.
+    `probes` are the dependency checks `/healthz` reports, by name. `controls` supplies the
+    field kill switch and limits (default: the settings values, no Flagsmith requests).
     """
     lab_key = settings.sa_lab_key.get_secret_value() if settings.sa_lab_key else None
     sweep_interval = min(MAX_SWEEP_SECONDS, float(settings.sa_session_idle_seconds))
     salt = ip_salt(lab_key)
-    gate = FieldGate(
-        enabled=settings.sa_field_enabled,
-        max_concurrent_sessions=settings.sa_max_concurrent_sessions,
-        sessions_per_ip_per_hour=settings.sa_field_sessions_per_ip_per_hour,
+    field_controls = (
+        controls if controls is not None else Controls.from_settings(settings, remote=False)
     )
+    gate = FieldGate(field_controls)
     # Admission and session creation happen together, so the cap cannot be overshot.
     admission = threading.Lock()
     health = HealthMonitor(probes or {})
@@ -299,15 +309,16 @@ def build_server(
 
     @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
     async def healthz(request: Request) -> JSONResponse:
-        """Liveness, the deployed commit, open sessions and cached dependency checks."""
+        """Liveness, the deployed commit, open sessions, field controls and dependency checks."""
         checks, checked_at = await asyncio.to_thread(health.checks)
+        values = await asyncio.to_thread(field_controls.get)
         healthy = all(result is not False for result in checks.values())
         return JSONResponse(
             {
                 "status": "ok" if healthy else "degraded",
                 "commit": settings.sa_git_commit,
                 "active_sessions": manager.open_count(),
-                "field_enabled": settings.sa_field_enabled,
+                "controls": values.payload(),
                 "checks": checks,
                 "checked_at": checked_at.isoformat(),
             }
@@ -346,7 +357,10 @@ def server_from_settings(settings: Settings) -> FastMCP:
         experiment.reachable if isinstance(experiment, FlagsmithExperimentClient) else None
     )
     return build_server(
-        manager, settings, probes={"database": ledger.ping, "flagsmith": flagsmith_probe}
+        manager,
+        settings,
+        probes={"database": ledger.ping, "flagsmith": flagsmith_probe},
+        controls=Controls.from_settings(settings),
     )
 
 

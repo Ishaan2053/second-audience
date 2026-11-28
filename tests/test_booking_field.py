@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from fastmcp import Client
 from fastmcp.utilities.tests import ASGIServer, asgi_server
+from flagsmith.models import Flags
 from mcp.types import Implementation
 from pydantic import SecretStr
 from sqlalchemy import Engine, create_engine, func, select
@@ -22,6 +23,7 @@ from second_audience.booking.limits import FIELD_CLOSED, RATE_LIMITED, SERVER_BU
 from second_audience.booking.server import build_server
 from second_audience.booking.sessions import SessionManager
 from second_audience.config import Settings
+from second_audience.core.controls import CONTROLS_TTL_SECONDS, Controls, FieldLimits
 from second_audience.core.experiment import NullExperimentClient
 from second_audience.core.ledger import Ledger, sessions
 
@@ -32,7 +34,10 @@ CLIENT_INFO = Implementation(name="field-agent", version="1.0")
 
 @asynccontextmanager
 async def serve(
-    tmp_path: Path, probes: dict[str, Probe | None] | None = None, **overrides: Any
+    tmp_path: Path,
+    probes: dict[str, Probe | None] | None = None,
+    controls: Controls | None = None,
+    **overrides: Any,
 ) -> AsyncIterator[tuple[ASGIServer, Engine]]:
     """Serve the app in-process with the given settings overrides."""
     engine = create_engine(f"sqlite:///{tmp_path / 'field.db'}")
@@ -45,7 +50,7 @@ async def serve(
         sa_lab_key=SecretStr(LAB_KEY),
         **overrides,
     )
-    async with asgi_server(build_server(manager, settings, probes)) as server:
+    async with asgi_server(build_server(manager, settings, probes, controls)) as server:
         yield server, engine
     engine.dispose()
 
@@ -92,6 +97,54 @@ async def test_kill_switch_refuses_field_sessions_and_keeps_lab(tmp_path: Path) 
         assert refused["error"]["code"] == FIELD_CLOSED
         assert "session_id" in lab
         assert session_count(engine) == 1
+
+
+class FlagsmithStub:
+    """Environment flags for `field_enabled` and `field_limits` that a test can change."""
+
+    def __init__(self) -> None:
+        self.enabled = True
+        self.limits = '{"sessions_per_ip_per_hour": 10, "max_concurrent_sessions": 50}'
+
+    def __call__(self) -> Flags:
+        api = [
+            {
+                "feature": {"name": "field_enabled", "id": 1},
+                "enabled": self.enabled,
+                "feature_state_value": None,
+            },
+            {
+                "feature": {"name": "field_limits", "id": 2},
+                "enabled": True,
+                "feature_state_value": self.limits,
+            },
+        ]
+        return Flags.from_api_flags(api, analytics_processor=None, default_flag_handler=None)
+
+
+async def test_flag_changes_apply_after_the_cache_expires_without_a_restart(
+    tmp_path: Path,
+) -> None:
+    clock = [0.0]
+    stub = FlagsmithStub()
+    fallback = FieldLimits(sessions_per_ip_per_hour=10, max_concurrent_sessions=50)
+    controls = Controls(True, fallback, fetch=stub, clock=lambda: clock[0])
+    async with serve(tmp_path, controls=controls) as (server, engine):
+        assert "session_id" in await begin(server)
+        stub.enabled = False
+        assert "session_id" in await begin(server)  # cached for up to the TTL
+        clock[0] += CONTROLS_TTL_SECONDS
+        assert (await begin(server))["error"]["code"] == FIELD_CLOSED
+        assert "session_id" in await begin(server, LAB_HEADERS)  # lab sessions continue
+        stub.enabled = True
+        stub.limits = '{"sessions_per_ip_per_hour": 2, "max_concurrent_sessions": 50}'
+        clock[0] += CONTROLS_TTL_SECONDS
+        assert (await begin(server))["error"]["code"] == RATE_LIMITED  # two already this hour
+        async with server.http_client() as http:
+            body = (await http.get("/healthz")).json()
+        assert session_count(engine) == 3
+    assert body["controls"]["sessions_per_ip_per_hour"] == 2
+    assert body["controls"]["source"] == {"field_enabled": "flagsmith", "limits": "flagsmith"}
 
 
 async def test_concurrency_cap_counts_open_sessions_only(tmp_path: Path) -> None:
@@ -161,7 +214,12 @@ async def test_healthz_reports_commit_sessions_and_checks_without_auth(tmp_path:
     assert body["status"] == "ok"
     assert body["commit"] == "abc1234"
     assert body["active_sessions"] == 1
-    assert body["field_enabled"] is True
+    assert body["controls"] == {
+        "field_enabled": True,
+        "sessions_per_ip_per_hour": 10,
+        "max_concurrent_sessions": 50,
+        "source": {"field_enabled": "settings", "limits": "settings"},
+    }
     assert body["checks"] == {"database": True, "flagsmith": None}
     assert second.json()["checked_at"] == body["checked_at"]
     assert calls == ["database"]  # cached, not re-checked per request

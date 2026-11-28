@@ -1,6 +1,8 @@
 """Abuse protection for the public endpoint: kill switch, concurrency cap and per-IP rate limit.
 
-Limits apply only when a field session begins. Lab sessions (a valid lab key) are exempt, and
+The switch and the limits come from `core.controls` (Flagsmith flags with a settings
+fallback), read on every admission, so a change applies without a restart. Limits apply only
+when a field session begins. Lab sessions (a valid lab key) are exempt, and
 a refused `begin_task` creates no session and records nothing in the ledger. The client IP is
 hashed as soon as it is read; the raw address is never stored or logged.
 """
@@ -15,9 +17,10 @@ import time
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from second_audience.booking.errors import error_payload
+from second_audience.core.controls import ControlValues
 
 RATE_LIMITED = "RATE_LIMITED"
 SERVER_BUSY = "SERVER_BUSY"
@@ -68,20 +71,20 @@ def client_ip(headers: Mapping[str, str], peer: str | None, trust_proxy: bool) -
 
 
 class SlidingWindowLimiter:
-    """Allows at most `limit` events per key in any `window_seconds` span. Safe across threads."""
+    """Allows at most `limit` events per key in any `window_seconds` span. Safe across threads.
 
-    def __init__(
-        self, limit: int, window_seconds: float, clock: Callable[[], float] = time.monotonic
-    ) -> None:
-        """Set the limit and window; `clock` is injectable for tests."""
-        self._limit = limit
+    The limit is given per call, so it can change while the window keeps its history.
+    """
+
+    def __init__(self, window_seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
+        """Set the window; `clock` is injectable for tests."""
         self._window = window_seconds
         self._clock = clock
         self._events: dict[str, deque[float]] = {}
         self._last_sweep = clock()
         self._lock = threading.Lock()
 
-    def acquire(self, key: str) -> float | None:
+    def acquire(self, key: str, limit: int) -> float | None:
         """Count one event for `key` and return None, or return seconds until a slot frees."""
         now = self._clock()
         cutoff = now - self._window
@@ -90,8 +93,9 @@ class SlidingWindowLimiter:
             events = self._events.setdefault(key, deque())
             while events and events[0] <= cutoff:
                 events.popleft()
-            if len(events) >= self._limit:
-                return events[0] - cutoff
+            if len(events) >= limit:
+                # With a lowered limit the oldest event may not be the one that frees a slot.
+                return events[len(events) - limit] - cutoff
             events.append(now)
             return None
 
@@ -120,48 +124,52 @@ class Refusal:
         return payload
 
 
+class ControlSource(Protocol):
+    """Where the gate reads the kill switch and limits (`core.controls.Controls`)."""
+
+    def get(self) -> ControlValues:
+        """The control values currently in force."""
+        ...
+
+
 class FieldGate:
     """Decides whether a new field session may begin. Callers serialise admit-and-begin."""
 
     def __init__(
-        self,
-        *,
-        enabled: bool,
-        max_concurrent_sessions: int,
-        sessions_per_ip_per_hour: int,
-        clock: Callable[[], float] = time.monotonic,
+        self, controls: ControlSource, clock: Callable[[], float] = time.monotonic
     ) -> None:
-        """Configure the kill switch, the global cap and the per-IP hourly limit."""
-        self._enabled = enabled
-        self._max_concurrent = max_concurrent_sessions
-        self._per_ip = sessions_per_ip_per_hour
-        self._limiter = SlidingWindowLimiter(sessions_per_ip_per_hour, WINDOW_SECONDS, clock)
+        """Read the kill switch, the global cap and the per-IP hourly limit from `controls`."""
+        self._controls = controls
+        self._limiter = SlidingWindowLimiter(WINDOW_SECONDS, clock)
 
     def admit(self, ip_hash: str | None, open_sessions: int) -> Refusal | None:
         """None if the session may begin (and counts it against the IP), else the refusal.
 
         Without an address (stdio transport) only the kill switch and the cap apply.
         """
-        if not self._enabled:
+        values = self._controls.get()
+        if not values.field_enabled:
             return Refusal(
                 FIELD_CLOSED, "This public endpoint is not accepting new sessions right now."
             )
-        if open_sessions >= self._max_concurrent:
+        max_concurrent = values.limits.max_concurrent_sessions
+        if open_sessions >= max_concurrent:
             return Refusal(
                 SERVER_BUSY,
-                f"The server is at its limit of {self._max_concurrent} open sessions. "
+                f"The server is at its limit of {max_concurrent} open sessions. "
                 f"Retry in {BUSY_RETRY_SECONDS} seconds.",
                 BUSY_RETRY_SECONDS,
             )
         if ip_hash is None:
             return None
-        wait = self._limiter.acquire(ip_hash)
+        per_ip = values.limits.sessions_per_ip_per_hour
+        wait = self._limiter.acquire(ip_hash, per_ip)
         if wait is None:
             return None
         retry = max(1, math.ceil(wait))
         return Refusal(
             RATE_LIMITED,
-            f"At most {self._per_ip} new sessions per hour are allowed from one address. "
+            f"At most {per_ip} new sessions per hour are allowed from one address. "
             f"Retry in {retry} seconds.",
             retry,
         )
