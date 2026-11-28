@@ -30,7 +30,7 @@ Runs on every pull request and on pushes to `main`.
 | Lock check | `uv lock --check` | yes |
 | Lint | `uv run ruff check .` | yes |
 | Format | `uv run ruff format --check .` | yes |
-| Types | `uv run mypy src` | yes |
+| Types | `uv run mypy src examples` | yes |
 | Tests | `uv run pytest -m "not network"` | yes |
 | Build | `uv build` | yes |
 | Docker build | `docker build .`, then start the image and wait for `/healthz` (added in SA-11) | yes |

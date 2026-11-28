@@ -375,7 +375,7 @@ flowchart LR
 
 | Component | Package | Role |
 |---|---|---|
-| Core middleware | `second_audience.core` | `ExperimentClient` (Flagsmith SDK: assignment, exposure, events), `ErrorStyle`, `Ledger` (SQLAlchemy Core) |
+| Core middleware | `second_audience.core` | `SecondAudience` (public API), `ExperimentClient` (Flagsmith SDK: assignment, exposure, events), `ErrorStyle`, `Ledger` (SQLAlchemy Core) |
 | Reference server | `second_audience.booking` | FastMCP room-booking server: seven tools, twelve scenarios, suggestion heuristic, checker, field limits, `/healthz` |
 | Lab runner | `second_audience.lab` | Gemini-driven agent sessions over MCP, paced to free-tier quotas, resumable |
 | Operator agent | `second_audience.operator` | `sa` CLI: doctor, start, status, report, propose, ship |
@@ -385,43 +385,87 @@ Full detail, contracts and data model: [`docs/02-architecture.md`](docs/02-archi
 
 ## Use it on your own MCP server
 
-There is no packaged middleware API yet (the stretch ticket SA-18 was not built). What exists
-is `second_audience.core`, which the reference server uses, and its pattern carries over to
-any MCP server whose response style you want to test:
+`second_audience.core` exposes a small API, `SecondAudience`, that wraps the experiment
+client and, optionally, the ledger. It carries over the booking server's pattern: resolve the
+variant lazily at the first response that differs between arms (which records the exposure),
+and send outcome events only for sessions exposed inside a running experiment. It runs offline
+with the control style when `FLAGSMITH_ENVIRONMENT_KEY` is not set.
+
+[`examples/inventory_server/`](examples/inventory_server/) is a second, unrelated MCP server
+(stock reservation, three tools) built on it. Its "insufficient stock" error is the response
+under test. The code below is copied from
+[`examples/inventory_server/server.py`](examples/inventory_server/server.py), which
+`tests/test_example_inventory.py` exercises:
 
 ```python
-from second_audience.config import get_settings
-from second_audience.core.experiment import TASK_FINISHED, FlagsmithExperimentClient
-from second_audience.core.ledger import Ledger, make_engine
+from second_audience.core import TASK_COMPLETED, TASK_FINISHED, ErrorStyle, SecondAudience
 
-settings = get_settings()  # FLAGSMITH_ENVIRONMENT_KEY, SA_FLAG_NAME, ...
-experiment = FlagsmithExperimentClient.from_settings(settings)
-ledger = Ledger(make_engine(settings))  # SQLite by default, Postgres via SA_DATABASE_URL
+sa = SecondAudience.from_settings(settings, flag_name=settings.sa_example_flag_name)
 
-# When a session begins (the ledger's columns are booking-oriented today):
-ledger.start_session(session_id, "s01", "aligned", "field", "claude-code", client_ip_hash=None)
+# In a tool, at the state-dependent failure whose wording you are testing:
+            if order.stock[(sku, warehouse)] < quantity:
+                style = sa.variant(session_id)  # lazy exposure: the first styled error
+                return insufficient_stock(order, sku, warehouse, quantity, style)
 
-# At the first moment the variant matters (here: the first styled error of a session):
-style, variant = experiment.style_for(session_id, {"agent_label": "claude-code", "source": "field"})
-ledger.record_exposure(session_id, variant, in_experiment=variant is not None)
-# ... render the response using `style` (an ErrorStyle) ...
-
-# When the session ends, for exposed sessions in the experiment:
-experiment.track(session_id, TASK_FINISHED, value=tool_calls)
-experiment.flush()
+# When the session ends:
+        if completed:
+            sa.outcome(session_id, TASK_COMPLETED)
+        sa.outcome(session_id, TASK_FINISHED, value=calls)
+        sa.end(session_id)
 ```
 
-What is reusable today: lazy, one-call assignment and exposure with a per-session cache and a
-control fallback; event tracking with numeric values; the ledger and its reconciliation in
-`sa report`; the operator commands, which work from any spec in `experiments/<slug>.yaml`.
+See both arms of the same failing call, with no Flagsmith account:
 
-What is specific to this project and would need changing for another server: the style
-fields (`ErrorStyle` has three booleans), the fixed set of event names (`track` accepts only
-`task_completed`, `task_wrong_booking` and `task_finished`), the ledger's booking-oriented
-columns (`scenario_id`, `scenario_kind`), and the outcome checker, which is per domain. The
-session flow to copy is `SessionManager` in
-[`booking/sessions.py`](src/second_audience/booking/sessions.py). A general middleware API
-with configurable styles and events is future work.
+```powershell
+uv run python -m examples.inventory_server.client
+```
+
+```text
+--- control
+{
+  "error": {
+    "code": "INSUFFICIENT_STOCK",
+    "message": "Warehouse EAST has 3 of SKU-100; 5 requested."
+  }
+}
+--- prescriptive
+{
+  "error": {
+    "code": "INSUFFICIENT_STOCK",
+    "message": "Warehouse EAST has 3 of SKU-100; 5 requested."
+  },
+  "suggestion": {
+    "warehouse": "WEST",
+    "available": 12
+  },
+  "corrected_call": {
+    "tool": "reserve_stock",
+    "arguments": {
+      "sku": "SKU-100",
+      "warehouse": "WEST",
+      "quantity": 5
+    }
+  }
+}
+```
+
+`uv run python -m examples.inventory_server.server` serves the example over stdio. With
+`FLAGSMITH_ENVIRONMENT_KEY` set, its style comes from the flag named by `SA_EXAMPLE_FLAG_NAME`
+(default `stock_error_style`), which must differ from `SA_FLAG_NAME`, so the example never
+takes part in the reference experiment. The example keeps no ledger; pass a `Ledger` to
+`SecondAudience` to record exposures there (each session must first be started with
+`Ledger.start_session`).
+
+What is reusable: lazy, one-call assignment and exposure with a per-session cache and a
+control fallback; outcome events with numeric values, sent only for enrolled sessions; the
+ledger and its reconciliation in `sa report`; the operator commands, which work from any spec
+in `experiments/<slug>.yaml`.
+
+What is still specific to this project: the style fields (`ErrorStyle` has three booleans:
+`suggest_alternative`, `corrected_call`, `caution_note`), the fixed set of event names
+(`task_completed`, `task_wrong_booking`, `task_finished`), the ledger's booking-oriented
+columns (`scenario_id`, `scenario_kind`), and the outcome checker, which is per domain.
+Configurable style models and event names are future work.
 
 ## Local setup
 
@@ -435,7 +479,7 @@ uv sync
 uv run pytest -m "not network"   # the offline suite, as CI runs it
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src
+uv run mypy src examples
 ```
 
 **Run the reference server offline.** `Settings` loads `.env` from the current directory
