@@ -196,3 +196,20 @@ What the lab snapshot supports (quote the recording-day lab numbers instead):
 Before the full recording, record a 30-second clip of shot 2a at 1920x1080 and check that the
 tool arguments, the red error panels and the yellow suggestion block are readable at 100%
 and on a phone screen. If not, raise the font size and lower `--width` (for example 120).
+
+**Result (2026-11-28).** Shot 2a was recorded with `--width 140 --delay 2.5` in a Windows
+console sized to the 140 columns, scaled to 1920x1080 with ffmpeg (`gdigrab`, mouse hidden).
+
+- At 100% everything is readable: the banner and source line, the brief, every tool argument,
+  the red "first styled error" panels, the yellow suggestion block with the corrected call, and
+  the green outcome footers.
+- On a phone (the frame shown 640 pixels wide) the colours and the two-column layout carry,
+  but the text is not readable.
+- For the final recording: raise the terminal font so the 140 columns fill the frame, and in
+  the edit zoom to the step being narrated (the two `#2 book_room` panels, then the footers).
+  `--width 120` wraps the corrected call onto more lines and gains little.
+- The replay scrolls past one screen by the end, so the banner leaves the top of the frame.
+  Use `--step` and pause on the first styled error, as the shot says, then let it run to the
+  footers.
+- Run it from a normal terminal. A shell with `NO_COLOR` set (some tool and CI shells set it)
+  prints the replay without any colour.
