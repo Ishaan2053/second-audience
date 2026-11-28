@@ -4,10 +4,13 @@ Every number here comes from an `Analysis` (Flagsmith results, `manual.yaml`, le
 The only model-written text is the prose of sections 1 and 9, and the report says so.
 """
 
-from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
+import contextlib
+import json
+from collections.abc import Callable, Iterable, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from second_audience.core.ledger import FLAGSMITH_AUDIT, AuditEntry
 from second_audience.operator.analysis import (
     FROM_DASHBOARD,
     SMALL_CELL,
@@ -18,6 +21,12 @@ from second_audience.operator.analysis import (
 )
 from second_audience.operator.narrative import Written
 from second_audience.operator.stats import SRM_ALPHA, Interval
+
+FLAG_CHANGING_ACTIONS = ("start", "ship", "ship_attempt")
+"""Operator audit actions that change Flagsmith, so Flagsmith's own audit log should echo them."""
+
+AUDIT_MATCH_WINDOW = timedelta(minutes=10)
+"""How far apart an operator action and a Flagsmith audit event may be to be paired."""
 
 HYPOTHESIS_LINK = "../../HYPOTHESIS.md"
 """From `reports/<slug>/report.md` to the pre-registration."""
@@ -310,10 +319,83 @@ def _decision(a: Analysis, written: Written) -> list[str]:
     return lines
 
 
+def _flagsmith_event(entry: AuditEntry) -> tuple[datetime, str]:
+    """A stored webhook event's own time (else when it arrived) and its log line, cell-safe."""
+    try:
+        detail = json.loads(entry.detail)
+    except json.JSONDecodeError:
+        detail = {}
+    detail = detail if isinstance(detail, dict) else {}
+    at = entry.at
+    created = detail.get("created_date")
+    if isinstance(created, str):
+        with contextlib.suppress(ValueError):
+            at = datetime.fromisoformat(created)
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=UTC)
+    log = detail.get("log")
+    text = " ".join(log.split())[:120] if isinstance(log, str) else "(no log text)"
+    return at, text.replace("|", "/").replace("`", "'")
+
+
+def audit_trail(entries: Sequence[AuditEntry], slug: str) -> list[str]:
+    """Pair each operator action that changed Flagsmith with its nearest Flagsmith audit event."""
+    lines = [
+        "## Independent audit trail",
+        "",
+        "Operator actions that changed Flagsmith, each paired with the nearest event from "
+        "Flagsmith's own audit log (received through the audit-log webhook) within "
+        f"{AUDIT_MATCH_WINDOW.seconds // 60} minutes. Pairing is by time only.",
+        "",
+    ]
+    actions = [
+        e for e in entries if e.experiment_slug == slug and e.action in FLAG_CHANGING_ACTIONS
+    ]
+    events = [_flagsmith_event(e) for e in entries if e.action == FLAGSMITH_AUDIT]
+    if not actions:
+        return [
+            *lines,
+            "No operator action that changes Flagsmith is recorded for this experiment.",
+        ]
+    unused = sorted(events)
+    rows = []
+    for action in actions:
+        near = [event for event in unused if abs(event[0] - action.at) <= AUDIT_MATCH_WINDOW]
+        match = min(near, key=lambda event: abs(event[0] - action.at)) if near else None
+        if match is None:
+            rows.append([action.action, _when(action.at), action.approved_by or "n/a",
+                         "no matching event", "n/a", "n/a"])  # fmt: skip
+            continue
+        unused.remove(match)
+        gap = (match[0] - action.at).total_seconds()
+        rows.append([action.action, _when(action.at), action.approved_by or "n/a",
+                     match[1], _when(match[0]), f"{gap:+.0f}"])  # fmt: skip
+    lines += _table(
+        ["Operator action", "At (ledger)", "Approved by", "Flagsmith event", "At (Flagsmith)",
+         "Gap (s)"],
+        rows,
+    )  # fmt: skip
+    if not events:
+        lines += [
+            "",
+            "No Flagsmith audit events have been received: the webhook is not configured, or "
+            "Flagsmith has not delivered any.",
+        ]
+    return lines
+
+
 def render(
-    a: Analysis, written: Written, results_file: str, note: str, shipped: str | None = None
+    a: Analysis,
+    written: Written,
+    results_file: str,
+    note: str,
+    shipped: str | None = None,
+    trail: Sequence[AuditEntry] = (),
 ) -> str:
-    """The full Markdown report; `shipped` is the dated record `sa ship` wrote, if any."""
+    """The full Markdown report; `shipped` is the dated record `sa ship` wrote, if any.
+
+    `trail` is the ledger's audit rows since the start, for the independent audit trail.
+    """
     lines = [
         f"# Report: {a.spec.slug}",
         "",
@@ -336,6 +418,7 @@ def render(
     ]
     for section in sections:
         lines += [*section(), ""]
+    lines += [*audit_trail(trail, a.spec.slug), ""]
     if shipped is not None:
         lines += [
             f"Sections 1 to 9 use `{results_file}`. The record below is the decision recorded "

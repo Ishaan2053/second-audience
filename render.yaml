@@ -31,3 +31,6 @@ services:
       # Shared lab secret; also salts the client IP hash.
       - key: SA_LAB_KEY
         sync: false
+      # Optional secret of Flagsmith's audit-log webhook; unset disables the route.
+      - key: SA_WEBHOOK_TOKEN
+        sync: false

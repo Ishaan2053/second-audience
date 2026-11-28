@@ -575,6 +575,7 @@ lists every variable. With `SA_ENV=prod`, `FLAGSMITH_ENVIRONMENT_KEY`, `SA_DATAB
 | `SA_MAX_CONCURRENT_SESSIONS` | `50` | server | open sessions above which field sessions are refused; fallback for the `field_limits` flag |
 | `SA_TRUST_PROXY` | `false` | server | read the client IP from `X-Forwarded-For` (only behind the host's proxy) |
 | `SA_GIT_COMMIT` | none | server | commit shown at `/healthz` |
+| `SA_WEBHOOK_TOKEN` | none | server | secret of Flagsmith's audit-log webhook; unset disables `POST /hooks/flagsmith-audit` |
 
 ### Tests
 

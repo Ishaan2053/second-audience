@@ -46,6 +46,9 @@ from second_audience.config import Settings
 
 Source = Literal["lab", "field"]
 
+FLAGSMITH_AUDIT = "flagsmith_audit"
+"""The `audit_log.action` of a Flagsmith audit-log event received through the webhook."""
+
 MAX_RESULT_BYTES = 8 * 1024
 """Stored tool results above this size (UTF-8 JSON) are replaced by a truncated preview."""
 
@@ -255,6 +258,17 @@ class SessionRecord:
     outcome: str | None
     final_state: str | None
     tool_call_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEntry:
+    """One `audit_log` row: an operator action, or a Flagsmith event from the webhook."""
+
+    at: datetime
+    action: str
+    experiment_slug: str | None
+    detail: str
+    approved_by: str | None
 
 
 def make_engine(settings: Settings, *, read_only: bool = False) -> Engine:
@@ -559,6 +573,25 @@ class Ledger:
                 .limit(1)
             ).first()
         return row is not None
+
+    def audit_entries(self, since: datetime) -> list[AuditEntry]:
+        """Every audit row written at or after `since`, oldest first."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(audit_log)
+                .where(audit_log.c.at >= since)
+                .order_by(audit_log.c.at, audit_log.c.id)
+            )
+            return [
+                AuditEntry(
+                    at=row.at,
+                    action=row.action,
+                    experiment_slug=row.experiment_slug,
+                    detail=row.detail,
+                    approved_by=row.approved_by,
+                )
+                for row in rows
+            ]
 
     def failing_sessions(self, limit: int) -> list[FailingSession]:
         """Return up to `limit` finished, non-correct sessions, newest first, with tool calls."""

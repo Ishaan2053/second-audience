@@ -128,6 +128,7 @@ must be set explicitly.
 | `SA_MAX_CONCURRENT_SESSIONS` | server | open sessions (lab and field) above which field `begin_task` is refused, default 50; fallback for the `field_limits` flag |
 | `SA_TRUST_PROXY` | server | take the client IP from `X-Forwarded-For`; `true` only behind the host's proxy; default `false` |
 | `SA_GIT_COMMIT` | server | commit hash shown at `/healthz`, set by the host or the Docker build |
+| `SA_WEBHOOK_TOKEN` | server | secret of Flagsmith's audit-log webhook, at least 16 characters; unset disables `POST /hooks/flagsmith-audit` (section 3.9) |
 
 The Flagsmith admin credential is never stored in this project. The operator shells out to
 the `flagsmith` CLI, which holds its own login.
@@ -720,6 +721,20 @@ the existing sliding window.
 answers 200 even when degraded, because the server keeps working without Flagsmith (control
 style) and a host should not restart it for that. `GET /` is the static page
 `booking/landing.html`.
+
+**Audit-log webhook (SA-22).** With `SA_WEBHOOK_TOKEN` set, `POST /hooks/flagsmith-audit`
+receives Flagsmith's organisation audit-log webhook (`booking/audit_hook.py`). Flagsmith signs
+the raw body with HMAC-SHA-256 under the webhook's secret and sends the hex digest in
+`X-Flagsmith-Signature`; the route uses `SA_WEBHOOK_TOKEN` as that secret. It refuses a body
+over 16 KiB (413, checked before the signature), a missing or wrong signature (401) and
+anything that is not a JSON object (400). A valid event is trimmed to typed, bounded fields
+(`created_date`, `log`, `related_object_type`, `related_object_id`, `related_object_uuid`,
+project and environment id and name, `author_id`; the author's email and name are dropped)
+and stored as an `audit_log` row with action `flagsmith_audit`, no slug and no approver. The
+content is stored and displayed only, never acted on. Without the token the route does not
+exist (404). `sa report` ends with an "Independent audit trail" table: each operator action
+that changed Flagsmith (`start`, `ship`, `ship_attempt`) paired with the nearest unused
+`flagsmith_audit` event within 10 minutes, by time only.
 
 ## 4. Flagsmith setup
 

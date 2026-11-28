@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     sa_max_concurrent_sessions: int = Field(default=50, gt=0)
     sa_trust_proxy: bool = False
     sa_git_commit: str | None = None
+    sa_webhook_token: SecretStr | None = Field(default=None, min_length=16)
 
     @field_validator("sa_lab_models", mode="before")
     @classmethod

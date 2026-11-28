@@ -320,6 +320,18 @@ def test_has_audit_matches_action_and_experiment(ledger: Ledger) -> None:
     assert not ledger.has_audit("ship", "error-style-v2")
 
 
+def test_audit_entries_since_a_time_oldest_first(ledger: Ledger) -> None:
+    ledger.audit("start", "error-style-v1", "{}", "ishaan")
+    ledger.audit("flagsmith_audit", None, '{"log": "x"}', None)
+    entries = ledger.audit_entries(datetime.now(UTC) - timedelta(minutes=1))
+    assert [(e.action, e.experiment_slug, e.approved_by) for e in entries] == [
+        ("start", "error-style-v1", "ishaan"),
+        ("flagsmith_audit", None, None),
+    ]
+    assert entries[0].at <= entries[1].at
+    assert ledger.audit_entries(datetime.now(UTC) + timedelta(minutes=1)) == []
+
+
 def test_failing_sessions_filters_orders_and_limits(ledger: Ledger) -> None:
     outcomes = {"a": "correct", "b": "incorrect", "c": "no_booking", "d": None, "e": "abandoned"}
     for session_id, outcome in outcomes.items():

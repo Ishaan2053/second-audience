@@ -76,6 +76,7 @@ setting keeps its default from `second_audience.config.Settings`.
 | `FLAGSMITH_ENVIRONMENT_KEY` | Production **server-side** key (`ser.…`) | Dashboard |
 | `SA_DATABASE_URL` | Supabase **session pooler** URI, `postgresql+psycopg://postgres.<ref>:<password>@aws-<n>-<region>.pooler.supabase.com:5432/postgres?sslmode=require` | Dashboard |
 | `SA_LAB_KEY` | Same value as the developer's local `.env` (lab sessions and the IP-hash salt) | Dashboard |
+| `SA_WEBHOOK_TOKEN` | Optional. The secret of Flagsmith's audit-log webhook (section 11); unset disables the route | Dashboard |
 | `PORT`, `RENDER_GIT_COMMIT` | Set by Render | Render |
 
 Never set on the host: `GEMINI_API_KEY` or any model key, and any Flagsmith admin
@@ -263,3 +264,39 @@ every 10 minutes (about 4,500 a month), plus at most one more read in each minut
 field sessions begin. This comes on top of the existing `/healthz` Flagsmith probe (cached
 30 s) and the experiment's identity requests, against the free plan's 50,000 requests a
 month.
+
+## 11. Flagsmith integrations (SA-22)
+
+Plan check on 2026-11-28, organisation `Second Audience` (id 42163), plan `free`, read-only
+API calls with the `flagsmith` CLI:
+
+| Integration | Free plan | Evidence |
+|---|---|---|
+| Audit-log webhook | API open; delivery unverified | `api/v1/organisations/42163/webhooks/` answers 200 and allows `POST`. But the subscription metadata reports `audit_log_visibility_days: 0`, `api/v1/audit/` returns no rows, and Flagsmith's dashboard code lists the audit log (`AUDIT`) as a Scale-Up feature. Whether events are delivered on the free plan is known only once the webhook is set up |
+| Slack | API open | `api/v1/environments/<key>/integrations/slack/` answers 200 (empty) |
+| GitHub | API open | `api/v1/organisations/42163/integrations/github/` answers 200 (empty) |
+
+**Audit-log webhook setup** (developer, once the SA-22 commit is deployed):
+
+1. Generate a secret: `uv run python -c "import secrets; print(secrets.token_hex(20))"`.
+2. Render Dashboard, service, **Environment**: add `SA_WEBHOOK_TOKEN` with it, **Save and
+   deploy** (this restarts the service and drops in-flight field sessions).
+3. Flagsmith, **Organisation settings > Webhooks > Audit log webhook**: URL
+   `https://second-audience.onrender.com/hooks/flagsmith-audit`, the same secret. The webhook
+   is organisation-wide, so it also reports Production changes; it never changes anything.
+4. Toggle a flag in **Development** (for example `flagsmith flag disable field_limits -p
+   second-audience -e JDfxGiKY3RS8ByAPE4CVCP --yes`, then `enable`), and check the ledger:
+
+   ```sql
+   select at, detail from audit_log where action = 'flagsmith_audit' order by at desc limit 5;
+   ```
+
+   No row means either the free plan does not deliver audit events or the secrets differ
+   (the server answers 401). Render's logs show `audit webhook refused: bad_signature` for the latter;
+   record which in this section.
+
+**Slack and GitHub** need the developer's OAuth sign-in in the Flagsmith dashboard: Slack
+under the Development environment's **Integrations**, posting to a channel in the personal
+workspace; GitHub under **Organisation settings > Integrations**, then link `error_style` to
+the SA-09 issue (#18) from the flag's **Links** tab. Screenshots of a Slack message from an
+operator action in Development and of the flag on the GitHub issue go in `docs/img/`.
