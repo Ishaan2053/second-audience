@@ -87,6 +87,7 @@ second-audience/
       report.py                 Markdown report and status lines
       propose.py                `sa propose` evidence, validation and drafts
       ship.py                   `sa ship` plan, completion, read-back and smoke
+      per_model.py              `sa ship --per-model`: per-model rule, segment rollout
       gemini.py                 Gemini client for the operator
     demo/
       pairs.py                  replay candidates and pattern counts (scripts/find_pairs.py)
@@ -519,6 +520,7 @@ It then calls `finish_task` if the model did not.
 | `sa status <slug>` | Enrolment, stopping-rule progress. Refuses to name a winner early. | none |
 | `sa report <slug>` | Refreshes and saves results, builds the Markdown report. | none |
 | `sa ship <slug>` | Ends the experiment and sets the winning value on the flag, or records a no-ship decision. | typed confirmation |
+| `sa ship <slug> --per-model` | After the experiment has ended with control, serves the variant only to the agent models it helped, through a segment override (exploratory). | typed confirmation |
 
 Every mutating action is written to `audit_log`.
 
@@ -678,6 +680,38 @@ at the stopping point.
   pending record in `report.md`. Later `sa report` runs keep it at the end, after a line
   saying the body uses the newer results file and the record is the decision applied. Any
   problem after the change is recorded this way and exits 1.
+
+**Per-model rollout (SA-21).** `sa ship <slug> --per-model [--dry-run]` (`per_model.py`)
+turns the report's by-model breakdown into an action, once the experiment has ended. It is
+exploratory, based on small per-model samples, and every output says so.
+
+- **Preconditions:** the experiment is `completed` (the flag is locked while it runs, so
+  run `sa ship <slug>` first) and the environment default serves control to everyone,
+  enabled. Otherwise it refuses and changes nothing. A segment named `sa-<slug>-rollout`
+  that already exists is reused only if its rule matches the planned models exactly.
+- **Rule** (printed with the table): include a model when it has at least 20 scored
+  sessions in each arm, its correct rate is higher under the variant, and its
+  wrong-booking rate is not higher. Everything else keeps control. Counts come from the
+  ledger, the same `breakdown` as the report's section 6; `sa-ship-smoke` sessions are left
+  out. With no qualifying model it says so and changes nothing.
+- **Change** (after the human types `ship <slug> per-model`): `flagsmith segment create
+  sa-<slug>-rollout` with one rule, `agent_label` `IN` the chosen labels (a project
+  segment, inert until an override uses it), then `flagsmith flag update <flag> --segment
+  <id> --enable --value <variant value> --type string --weight <variant>=0` in the
+  experiment's environment. At 0% the override serves its own value to the whole segment.
+- **No server change:** the server already sends `agent_label` as a trait on the call that
+  resolves the flag (amendment A1), and Flagsmith evaluates the segment against the traits
+  of that same call (verified in Development, `docs/spike-findings.md`, SA-21).
+- **Verification:** the segment's rule and the override (enabled, value, every variant
+  weight 0) are read back, then one smoke session per included model and one excluded
+  label (the first excluded model, or `sa-ship-smoke` if every model is included) runs as
+  lab traffic with that label, with the same 6 s propagation wait and retries as `sa ship`.
+  These smoke sessions start after the experiment ended, so they are never enrolled; they
+  appear in the report's traffic table under the model's label.
+- **Record:** one `audit_log` row (action `ship_per_model`: rule, per-model counts,
+  included and excluded models, segment ID, smoke styles, problems), and a dated
+  "Per-model rollout" section in `reports/<slug>/per-model.md`, also appended to
+  `report.md`. Later `sa report` runs keep it after the Decision record. Any problem exits 1.
 
 ### 3.9 Public endpoint
 

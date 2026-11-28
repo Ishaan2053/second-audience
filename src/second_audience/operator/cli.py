@@ -13,7 +13,14 @@ import typer
 from second_audience.config import Settings, get_settings
 from second_audience.core.ledger import Ledger, make_engine
 from second_audience.core.styles import ErrorStyle
-from second_audience.operator.analysis import Analysis, RunState, analyse, ledger_exposures
+from second_audience.operator import per_model
+from second_audience.operator.analysis import (
+    SMOKE_AGENT_LABEL,
+    Analysis,
+    RunState,
+    analyse,
+    ledger_exposures,
+)
 from second_audience.operator.doctor import Report, run_checks
 from second_audience.operator.flagsmith_admin import FlagsmithAdmin, FlagsmithAdminError
 from second_audience.operator.gemini import JsonModel, gemini_json
@@ -89,7 +96,8 @@ class Context:
     make_drafter: Callable[[Settings], Drafter | None]
     sleep: Callable[[float], None]
     make_proposer: Callable[[Settings], JsonModel | None]
-    smoke: Callable[[Settings], ErrorStyle]
+    smoke: Callable[[Settings, str], ErrorStyle]
+    """One smoke session sent with the given agent label; returns the style it was served."""
 
 
 def _drafter(settings: Settings) -> Drafter | None:
@@ -336,7 +344,12 @@ def report(
     written = write_narrative(analysis, drafter, settings.sa_operator_model)
     path = folder / "report.md"
     shipped = folder / DECISION_FILE
-    record = shipped.read_text(encoding="utf-8") if shipped.exists() else None
+    parts = [
+        f.read_text(encoding="utf-8").rstrip("\n")
+        for f in (shipped, folder / per_model.PER_MODEL_FILE)
+        if f.exists()
+    ]
+    record = "\n\n".join(parts) + "\n" if parts else None
     text = render(analysis, written, saved.path.as_posix(), saved.note, record, trail)
     path.write_text(text, encoding="utf-8", newline="\n")
     typer.echo(f"Results: {saved.path.as_posix()} ({saved.note})")
@@ -469,6 +482,14 @@ def ship(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Print the decision and the changes, then exit.")
     ] = False,
+    by_model: Annotated[
+        bool,
+        typer.Option(
+            "--per-model",
+            help="After the experiment has ended, roll the variant out to only the models it "
+            "helped, through a Flagsmith segment (exploratory).",
+        ),
+    ] = False,
 ) -> None:
     """Apply the decision rule; on typed confirmation end the experiment and roll it out."""
     context = make_context()
@@ -481,6 +502,9 @@ def ship(
         raise _fail(f"ship: no saved results in {folder.as_posix()}; run `sa report {slug}` first")
     raw = json.loads(results_file.read_text(encoding="utf-8"))
     analysis, ledger = _analyse(context, settings, spec, run_state, ExperimentResults.from_api(raw))
+    if by_model:
+        _ship_per_model(context, settings, admin, ledger, analysis, results_file, dry_run)
+        return
     try:
         experiment = admin.get_experiment(run_state.environment_key, run_state.experiment_id)
         plan = plan_ship(analysis, experiment, results_file)
@@ -496,12 +520,7 @@ def ship(
     except FlagsmithAdminError as error:
         raise _fail(f"ship: {error}") from error
     _print_ship_plan(plan)
-    if settings.sa_server_url is None:
-        raise _fail("ship: SA_SERVER_URL is not set, so the served style cannot be checked")
-    if settings.sa_lab_key is None:
-        raise _fail(
-            "ship: SA_LAB_KEY is not set, so the smoke session would count as field traffic"
-        )
+    _require_smoke_settings(settings)
     if dry_run:
         typer.echo("\nDry run: nothing was changed.")
         return
@@ -621,7 +640,9 @@ def _smoke(context: Context, settings: Settings, plan: ShipPlan, outcome: Outcom
         return
     expected = ErrorStyle.from_flag_value(plan.serve_value)
     try:
-        outcome.observed = smoke_until(lambda: context.smoke(settings), expected, context.sleep)
+        outcome.observed = smoke_until(
+            lambda: context.smoke(settings, SMOKE_AGENT_LABEL), expected, context.sleep
+        )
     except Exception as error:  # any network or protocol failure: the change is already made
         outcome.problems.append(f"smoke session failed: {type(error).__name__}: {error}")
         return
@@ -630,3 +651,117 @@ def _smoke(context: Context, settings: Settings, plan: ShipPlan, outcome: Outcom
         outcome.problems.append(
             f"smoke session saw {outcome.observed.model_dump()}, expected {expected.model_dump()}"
         )
+
+
+def _require_smoke_settings(settings: Settings) -> None:
+    """Refuse before any change when the served style could not be checked as lab traffic."""
+    if settings.sa_server_url is None:
+        raise _fail("ship: SA_SERVER_URL is not set, so the served style cannot be checked")
+    if settings.sa_lab_key is None:
+        raise _fail(
+            "ship: SA_LAB_KEY is not set, so the smoke session would count as field traffic"
+        )
+
+
+def _ship_per_model(
+    context: Context,
+    settings: Settings,
+    admin: FlagsmithAdmin,
+    ledger: Ledger,
+    analysis: Analysis,
+    results_file: Path,
+    dry_run: bool,
+) -> None:
+    """`sa ship --per-model`: plan, confirm, create the segment and override, verify, record."""
+    spec, state = analysis.spec, analysis.state
+    slug = spec.slug
+    try:
+        plan = per_model.plan_per_model(
+            analysis,
+            admin.get_experiment(state.environment_key, state.experiment_id),
+            admin.feature_state(state.environment_key, state.feature_id),
+            admin.get_segment(per_model.segment_name(slug)),
+            results_file,
+        )
+    except ShipRefusedError as error:
+        raise _fail(f"ship --per-model: refused: {error}; nothing was changed") from error
+    except FlagsmithAdminError as error:
+        raise _fail(f"ship --per-model: {error}") from error
+    typer.echo(f"\nPer-model rollout of {spec.variants[0].key} ({per_model.EXPLORATORY})")
+    typer.echo(f"Results: {results_file.as_posix()} (Flagsmith as of {analysis.results.as_of})")
+    typer.echo(f"Rule: {per_model.RULE}.")
+    for line in per_model.table(plan):
+        typer.echo(line)
+    if not plan.included:
+        typer.echo("\nNo model meets the rule: every model keeps control. Nothing to change.")
+        return
+    typer.echo("Changes in Flagsmith:")
+    for change in plan.changes():
+        typer.echo(f"  - {change}")
+    _require_smoke_settings(settings)
+    if dry_run:
+        typer.echo("\nDry run: nothing was changed.")
+        return
+    try:
+        approver = context.open_repo(Path.cwd()).user_name()
+    except GitError as error:
+        raise _fail(f"ship --per-model: {error}") from error
+    phrase = per_model.confirmation(slug)
+    typed = typer.prompt(f"\nType `{phrase}` to create the segment and override")
+    if typed.strip() != phrase:
+        raise _fail("ship --per-model: confirmation did not match; nothing was changed")
+    outcome = per_model.PerModelOutcome()
+    try:
+        per_model.apply(plan, admin, outcome)
+    except FlagsmithAdminError as error:
+        outcome.problems.append(f"applying the rollout failed: {error}")
+    if not outcome.problems:
+        per_model.verify(plan, admin, outcome)
+    if not outcome.problems:
+        _smoke_models(context, settings, plan, outcome)
+    detail = json.dumps(per_model.audit_detail(plan, outcome), sort_keys=True)
+    try:
+        ledger.audit("ship_per_model", slug, detail, approver)
+    except Exception as error:  # the files below must still be written
+        outcome.problems.append(f"audit log write (ship_per_model) failed: {type(error).__name__}")
+    text = per_model.record(plan, outcome, approver, context.now())
+    report_path = per_model.append_record(report_dir(slug), text)
+    typer.echo(
+        f"\nSegment {plan.segment} (id {outcome.segment_id}) gets {spec.variants[0].key} for "
+        f"{plan.included}; everyone else keeps control. Approved by {approver}. Recorded in the "
+        f"audit log and {report_path.as_posix()} ({per_model.EXPLORATORY})."
+    )
+    if outcome.problems:
+        raise _fail(
+            "ship --per-model: verification failed:\n"
+            + "\n".join(f"  - {p}" for p in outcome.problems)
+        )
+
+
+def _smoke_models(
+    context: Context,
+    settings: Settings,
+    plan: per_model.PerModelPlan,
+    outcome: per_model.PerModelOutcome,
+) -> None:
+    """One smoke session per included model and one excluded label; note any mismatch."""
+    for label, expected in plan.smoke_labels():
+
+        def probe(label: str = label) -> ErrorStyle:
+            return context.smoke(settings, label)
+
+        try:
+            observed = smoke_until(probe, expected, context.sleep)
+        except Exception as error:  # any network or protocol failure: record it
+            outcome.observed[label] = None
+            outcome.problems.append(
+                f"smoke session {label} failed: {type(error).__name__}: {error}"
+            )
+            continue
+        outcome.observed[label] = observed
+        typer.echo(f"Smoke session {label}: served style {observed.model_dump()}")
+        if observed != expected:
+            outcome.problems.append(
+                f"smoke session {label} saw {observed.model_dump()}, "
+                f"expected {expected.model_dump()}"
+            )
