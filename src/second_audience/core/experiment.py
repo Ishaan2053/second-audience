@@ -105,6 +105,8 @@ class FlagsmithExperimentClient:
         """Wrap an events-enabled SDK client; `cache_size` bounds the remembered sessions."""
         if cache_size < 1:
             raise ValueError("cache_size must be at least 1")
+        if not flag_name:
+            raise ValueError("flag_name must not be empty")
         self._sdk = sdk
         self._flag_name = flag_name
         self._cache_size = cache_size
@@ -115,7 +117,7 @@ class FlagsmithExperimentClient:
     def from_settings(cls, settings: Settings, flag_name: str | None = None) -> Self:
         """Build a client from `Settings` for `flag_name` (default `SA_FLAG_NAME`)."""
         sdk = sdk_from_settings(settings, enable_events=True, default_flag_handler=_control_flag)
-        return cls(sdk, flag_name or settings.sa_flag_name)
+        return cls(sdk, settings.sa_flag_name if flag_name is None else flag_name)
 
     def reachable(self) -> bool:
         """Whether Flagsmith answers an environment flags request and serves the flag.

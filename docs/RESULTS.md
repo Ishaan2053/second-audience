@@ -4,7 +4,7 @@
 > Everything here is an interim read, written for review before the cut-off. Items marked
 > `SA-17 PLACEHOLDER` are filled in from the final Flagsmith results and the final
 > `sa report` at the cut-off (ticket SA-17).
-
+<!-- SA-17 PLACEHOLDER: interim data cut-off; replace with final -->
 **Data cut-off (interim):** Flagsmith results as of **2026-11-26 18:02:13 UTC**, saved in
 [`reports/error-style-v1/results-20261126T180211Z.json`](../reports/error-style-v1/results-20261126T180211Z.json);
 report generated 2026-11-26 18:02:19 UTC. A read-only `sa status` at 2026-11-27 12:29 UTC
@@ -52,7 +52,7 @@ A session is exposed at its first styled error. Twelve scenarios: seven **aligne
 suggestion satisfies the brief) and five **traps** (the suggestion breaks the brief, yet a
 correct booking exists).
 
-## 2. Headline (from Flagsmith, interim)
+## 2. Headline (from Flagsmith, interim) <!-- SA-17 PLACEHOLDER: interim headline; replace with final -->
 
 Flagsmith's results combine lab and field sessions (they cannot be split by trait): 47 lab
 and 1 field exposed session.
@@ -75,7 +75,7 @@ lift, 95% credible interval and win probability for each metric]
 
 ## 3. Decision
 
-**Interim decision: inconclusive.** Exposed sessions per arm are control 23 and prescriptive
+**Interim decision: inconclusive.** Exposed sessions per arm are control 23 and prescriptive <!-- SA-17 PLACEHOLDER: interim decision; replace with the recorded decision -->
 25, below the pre-registered 75, and the hard end has not passed, so no winner is named
 (`HYPOTHESIS.md` section 10).
 
@@ -140,7 +140,7 @@ By model:
 | gemini-3.5-flash-lite (lab) | prescriptive | 16 | 87.5% (64.0% to 96.5%) | 4 |
 | claude-code (field) | prescriptive | 1 | 100.0% (20.7% to 100.0%) | 3 |
 
-What these interim numbers show, and what they do not:
+What these interim numbers show, and what they do not: <!-- SA-17 PLACEHOLDER: interim interpretation; rewrite from final numbers -->
 
 - **Traps did not catch the agents.** No session in either arm made a wrong booking, on traps
   or elsewhere. Every trap session ended correct in both arms (trap control 100% of 9, trap
@@ -182,7 +182,7 @@ Sessions that never hit a styled error are not exposed and are not part of the c
 - Breakdowns are exploratory and were not used for the decision; every cell by scenario kind
   and by model holds fewer than 20 sessions.
 - Each session is its own Flagsmith identity, so one agent can appear in both arms.
-- The stopping rule is not met: this is an interim read.
+- The stopping rule is not met: this is an interim read. <!-- SA-17 PLACEHOLDER: remove once the stopping rule is met or the hard end passed -->
 
 ## Flagsmith screenshots
 
@@ -205,14 +205,14 @@ metric with its direction ("should decrease") and the 50/50 split.
 warehouse.
 
 ![The three metrics: tool calls per session, task completed correctly, wrong booking](img/flagsmith-metrics.png)
-
+<!-- SA-17 PLACEHOLDER: interim exposures text; update to final -->
 **Exposures.** The analysis table shows the computed results (as of 2026-11-26 18:02 UTC,
 the same 23 and 25 exposures as the report). The enrolment chart below it was computed on
 2026-11-28 10:58 UTC and already includes that day's lab sessions (43 and 40). Inference is
 still empty: Flagsmith needs 50 identities and 5 conversions per arm.
 
 ![Interim analysis table and enrolment over time](img/flagsmith-exposures.png)
-
+<!-- SA-17 PLACEHOLDER: interim results view; replace or relabel -->
 **Interim results view.** The same page further up: users enrolled 48, no winning variation,
 chance to be best or lift yet.
 

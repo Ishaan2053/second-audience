@@ -12,7 +12,7 @@ as the engine.
 Built for Toggle Wars: The Flagsmith Experimentation Hackathon (Nov 26-29, 2026). Entered in
 **Track 01 (Test Something Real)** and **Track 02 (AI Agents and Feature Flags)**.
 
-> **Results status.** Experiment `error-style-v1` is still running. Every result below is an
+> **Results status.** Experiment `error-style-v1` is still running. Every result below is an <!-- SA-17 PLACEHOLDER: replace the interim results-status note with the final status -->
 > **interim** read (Flagsmith results as of 2026-11-26 18:02 UTC), before the pre-registered
 > stopping rule is met. Final numbers replace the marked placeholders at the cut-off.
 
@@ -100,7 +100,7 @@ constraints ([`booking/checker.py`](src/second_audience/booking/checker.py)); no
 anything. Exposure is recorded at a session's first styled error, the first moment the arm can
 make a difference.
 
-**Results (interim, not final).** From Flagsmith's results as of 2026-11-26 18:02:13 UTC
+**Results (interim, not final).** From Flagsmith's results as of 2026-11-26 18:02:13 UTC <!-- SA-17 PLACEHOLDER: interim counts and date; replace with final Flagsmith results -->
 ([`reports/error-style-v1/report.md`](reports/error-style-v1/report.md)). Flagsmith's counts
 include 47 lab sessions and 1 field session; the split by source is below.
 
@@ -119,7 +119,7 @@ either arm made a wrong booking, including on traps.
 Final results: [SA-17 PLACEHOLDER: final exposed counts, means, lift, credible interval and
 win probability from the final Flagsmith results]
 
-**Decision.** Interim: **inconclusive**. The stopping rule (75 exposed sessions per arm, or
+**Decision.** Interim: **inconclusive**. The stopping rule (75 exposed sessions per arm, or <!-- SA-17 PLACEHOLDER: interim decision; replace with the recorded sa ship decision -->
 the hard end 2026-11-29 06:30 UTC) is not met, so no winner is named; lift, intervals and win
 probability are withheld by design. Final decision: [SA-17 PLACEHOLDER: decision recorded by
 `sa ship`].
@@ -308,7 +308,7 @@ through it:
 - **The operator saves real work and keeps a human in charge.** One approved command sets up
   a pre-registered experiment; one report replaces manual exports and spreadsheets; one
   approved command ends it and verifies the rollout.
-- **Interim read (lab sessions only, not a finding):** mean tool calls were 3.92 in the
+- **Interim read (lab sessions only, not a finding):** mean tool calls were 3.92 in the <!-- SA-17 PLACEHOLDER: interim read; replace with the final finding -->
   prescriptive arm (24 sessions) against 4.43 in control (23), and no exposed session made a
   wrong booking, including on traps. The lower prescriptive mean is not a win: it includes the two
   prescriptive sessions that ended without a booking, and a session that gives up early uses
@@ -607,7 +607,7 @@ While an experiment is running, use `uv run pytest -m "not network"`.
   suggestions are wrong. The lab prompt asks agents to book directly, which raises exposure.
 - **Sample size and intervals.** At the pre-registered 75 exposed sessions per arm, only large
   effects can reach a 0.95 win probability; a null result means "no large effect found". The
-  interim read has 23 and 25 exposed sessions, and Flagsmith returns no inference for a metric
+  interim read has 23 and 25 exposed sessions, and Flagsmith returns no inference for a metric <!-- SA-17 PLACEHOLDER: interim exposure counts (23 and 25); update to final -->
   until each arm has at least 50 identities and 5 conversions, so the interim report shows no
   lift or interval. Guardrails with few
   events may be reported from ledger counts only (`HYPOTHESIS.md` section 10).
@@ -617,12 +617,13 @@ While an experiment is running, use `uv run pytest -m "not network"`.
   ledger, were not pre-registered as decision criteria, and every cell by scenario kind or
   model holds fewer than 20 sessions.
 - **Field sessions are few.** One field session in the interim data. Flagsmith's results mix
-  lab and field (they cannot be split by trait); the ledger reports them apart.
+  lab and field (they cannot be split by trait); the ledger reports them apart. <!-- SA-17 PLACEHOLDER: interim field-session count; update to final -->
 - **The primary metric changed before the start.** The pilot put correct completion at its
   ceiling, so tool calls became primary, before the experiment started (`HYPOTHESIS.md`
   section 2).
-- **Operator rollout rehearsal.** `sa ship` is tested against fakes and a read-only dry run;
-  its first live write is the Production cut-off.
+- **Operator rollout rehearsal.** `sa ship` is tested against fakes, a read-only dry run on
+  Production, and a full rehearsal on Development (both rollouts, SA-14c); its first
+  Production write is the cut-off.
 - **Public endpoint.** A free host that sleeps when idle (about a minute to wake). The per-IP
   limit reads the leftmost `X-Forwarded-For` entry, which a client can spoof; the global
   session cap bounds the load either way.

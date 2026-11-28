@@ -99,6 +99,11 @@ def test_cache_size_must_be_positive() -> None:
         FlagsmithExperimentClient(MagicMock(spec=Flagsmith), FLAG, cache_size=0)
 
 
+def test_flag_name_must_not_be_empty() -> None:
+    with pytest.raises(ValueError, match="flag_name"):
+        FlagsmithExperimentClient(MagicMock(spec=Flagsmith), "")
+
+
 def test_sdk_error_falls_back_to_control_and_logs_once(caplog: pytest.LogCaptureFixture) -> None:
     client, sdk = _client(RuntimeError("boom"))
     assert client.style_for("s-1") == (CONTROL, None)
