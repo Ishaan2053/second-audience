@@ -472,11 +472,14 @@ Terminal 2, scripted sessions with no model, in the same clone and with the same
 `SA_LAB_KEY` sends them as lab traffic; without it they count as field sessions, which are
 rate-limited to 10 per IP per hour. First confirm that port 8765 is the offline server:
 `/healthz` reports `checks.flagsmith` as `null` (not configured) only when the server has no
-`FLAGSMITH_ENVIRONMENT_KEY`. Then pass the local URL explicitly:
+`FLAGSMITH_ENVIRONMENT_KEY`. Stop if the check below throws. Then pass the local URL
+explicitly:
 
 ```powershell
-cd sa-offline                                                    # the offline clone, as in terminal 1
+cd ..\sa-offline                                                 # from the first clone: the offline clone beside it
+Test-Path .env                                                   # must print False
 $health = Invoke-RestMethod http://127.0.0.1:8765/healthz
+# Stop if this throws: port 8765 is then a configured server, not the offline one.
 if ($null -ne $health.checks.flagsmith) { throw "port 8765 is not the offline server: Flagsmith is configured" }
 $env:SA_DATABASE_URL = "sqlite:///./sa-offline.db"
 $env:SA_LAB_KEY = "local-dev-key"
@@ -538,7 +541,8 @@ credentials. With credentials they make real changes outside this repository:
 - they create a temporary `sa_test_*` feature in the Flagsmith project through the `flagsmith`
   CLI (which must be logged in), add a variant in the Development environment, and delete the
   feature afterwards. They resolve it with `FLAGSMITH_ENVIRONMENT_KEY`, which must therefore be
-  a **Development** environment key;
+  a **Development** environment key (with a Production key the probes never see the variant
+  and `tests/test_core_experiment.py` times out);
 - they create temporary `sa_test_*` schemas in the Postgres at `SA_DATABASE_URL` and drop them
   afterwards;
 - they drive one real Gemini session per model in `SA_LAB_MODELS`, using quota.

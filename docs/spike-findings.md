@@ -618,13 +618,32 @@ and `gemini-2.5-pro` start auto-routing to newer models on 2026-12-01, after the
   `rollout_decision: "variant"`.
 - **Never smoke-test a running experiment.** The smoke session's first attempt is a styled
   error, so on a running experiment it would be exposed and counted. `sa ship` runs it only
-  when the read-back shows the experiment `completed`, waits 5 s for edge propagation before
+  when the read-back shows the experiment `completed`, waits 6 s (5 s before SA-14b) for edge
+  propagation before
   the first probe too, sends it as lab traffic (`SA_LAB_KEY` is required) and excludes the
   `sa-ship-smoke` label from analysis and evidence. The live check during SA-14 was limited
   to a read-only `--dry-run` (refused: 23 and 25 exposed per arm against 75).
-- **`complete/` is irreversible, so the record comes first.** A re-run after an ended
-  experiment refuses ("already ended"), so the decision is recorded the moment `complete/`
-  succeeds; read-back and smoke failures become recorded problems, not crashes.
+- **`complete/` is irreversible, so the record comes first.** The decision is recorded the
+  moment `complete/` succeeds; read-back and smoke failures become recorded problems, not
+  crashes. Since SA-14b, a re-run on an experiment that already ended with the planned
+  rollout records it without a second `complete/` (one that ended otherwise is still
+  refused), and a `complete/` call that fails client-side leaves a `ship_attempt` audit row.
 - **Not yet run end to end.** The full flow against a throwaway Development experiment was
   not run in SA-14, to avoid any Flagsmith write while experiment 680 is live; it belongs
   before the Production run in SA-17.
+
+## Ship hardening (SA-14b)
+
+- **Feature-state shape is not guaranteed.** The SA-02 sample had
+  `multivariate_feature_option` as a bare option ID; it may also arrive nested as an object
+  with an `id`. `served_value` accepts both, and any other surprise (a missing key) is caught
+  inside the read-back and recorded as a problem: before SA-14b it escaped the guard after
+  the experiment had ended and skipped the `ship_verify` record. Not observed live; no
+  Flagsmith write was possible while experiment 680 runs.
+- **A new feature is not on every edge node at once.** In the `network` test, a probe that
+  reaches an edge node without the just-created feature gets
+  `FlagsmithFeatureDoesNotExistError` from `Flags.get_flag` (SDK 6.7.0), not a default flag.
+  `_wait_for_split` now treats that as "not propagated yet". The test needs a Development
+  environment key, because the variant is added in Development only.
+- **The smoke label is lab-only.** `ship_smoke` also requires `source == "lab"`, so a field
+  client that names itself `sa-ship-smoke` is still counted.

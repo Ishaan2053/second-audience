@@ -169,6 +169,7 @@ What the lab snapshot supports (quote the recording-day lab numbers instead):
   (`uv run python -m second_audience.booking.server --transport http --port 8000`), state the
   public URL on screen, and show field rows from the ledger
   (`uv run python scripts/find_pairs.py --source field` lists the field cells).
+  Do not connect an agent to this local server; it is production-configured.
 
 ### 6. Ship (15 s)
 
