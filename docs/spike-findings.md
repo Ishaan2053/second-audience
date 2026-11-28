@@ -761,3 +761,20 @@ experiment 680 were not touched.
   (`FlagsmithAPIError`) and on a missing feature (`FlagsmithFeatureDoesNotExistError`). The
   controls client uses its own SDK instance without one, so a failure cannot be mistaken
   for flag values. The experiment client keeps its control-style handler.
+
+## Flagsmith integrations on the free plan (SA-22)
+
+Checked 2026-11-28 with read-only `flagsmith api` calls.
+
+- **The audit log is not visible on the free plan.**
+  `organisations/42163/get-subscription-metadata/` reports `audit_log_visibility_days: 0`
+  and `api/v1/audit/` returns `count: 0` although flags were changed the same day.
+  Flagsmith's dashboard code maps `AUDIT` to the Scale-Up plan. The audit-log webhook list
+  (`organisations/42163/webhooks/`) still answers 200 and allows `POST`, so creation looks
+  possible; whether events are sent is not documented and was not testable before the route
+  is deployed.
+- **The webhook secret is an HMAC key, not a token in the URL.** Flagsmith sends
+  `X-Flagsmith-Signature` = hex HMAC-SHA-256 of the raw body under the secret, so
+  `SA_WEBHOOK_TOKEN` is used as that secret and the path stays fixed.
+- **Slack and GitHub integration endpoints answer 200** on the free plan (empty lists);
+  both still need an OAuth sign-in in the dashboard.
