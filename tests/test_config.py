@@ -28,6 +28,7 @@ ALL_VARS = (
     "SA_MAX_CONCURRENT_SESSIONS",
     "SA_TRUST_PROXY",
     "SA_GIT_COMMIT",
+    "SA_WEBHOOK_TOKEN",
 )
 
 PROD_VARS = {
@@ -65,6 +66,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.sa_max_concurrent_sessions == 50
     assert settings.sa_trust_proxy is False
     assert settings.sa_git_commit is None
+    assert settings.sa_webhook_token is None
     assert settings.sa_lab_models == []
     assert settings.flagsmith_environment_key is None
     assert settings.gemini_api_key is None

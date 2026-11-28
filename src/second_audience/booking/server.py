@@ -3,8 +3,9 @@
 The tool schema and descriptions are identical in both experiment arms. Only the optional
 fields a styled error carries differ, and those are decided in `SessionManager`.
 
-Over HTTP it also serves a landing page at `/` and `/healthz`, and limits new field sessions
-(`limits.py`). Run it with `uv run python -m second_audience.booking.server --transport http
+Over HTTP it also serves a landing page at `/` and `/healthz`, limits new field sessions
+(`limits.py`) and, with `SA_WEBHOOK_TOKEN` set, receives Flagsmith's audit-log webhook
+(`audit_hook.py`). Run it with `uv run python -m second_audience.booking.server --transport http
 --port 8000` (MCP at `/mcp`) or `--transport stdio`.
 """
 
@@ -25,6 +26,7 @@ from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
+from second_audience.booking import audit_hook
 from second_audience.booking.health import HealthMonitor, Probe
 from second_audience.booking.limits import (
     ControlSource,
@@ -43,7 +45,7 @@ from second_audience.core.experiment import (
     FlagsmithExperimentClient,
     NullExperimentClient,
 )
-from second_audience.core.ledger import Ledger, make_engine
+from second_audience.core.ledger import FLAGSMITH_AUDIT, Ledger, make_engine
 
 logger = logging.getLogger(__name__)
 
@@ -147,11 +149,14 @@ def build_server(
     settings: Settings,
     probes: Mapping[str, Probe | None] | None = None,
     controls: ControlSource | None = None,
+    audit_store: audit_hook.Store | None = None,
 ) -> FastMCP:
     """Create the FastMCP app with the seven booking tools, bound to `manager`.
 
     `probes` are the dependency checks `/healthz` reports, by name. `controls` supplies the
     field kill switch and limits (default: the settings values, no Flagsmith requests).
+    `audit_store` receives verified audit-log webhook records; the webhook route exists only
+    when it and `SA_WEBHOOK_TOKEN` are both set.
     """
     lab_key = settings.sa_lab_key.get_secret_value() if settings.sa_lab_key else None
     sweep_interval = min(MAX_SWEEP_SECONDS, float(settings.sa_session_idle_seconds))
@@ -324,6 +329,15 @@ def build_server(
             }
         )
 
+    webhook_token = settings.sa_webhook_token
+    if webhook_token is not None and audit_store is not None:
+        secret, store = webhook_token.get_secret_value(), audit_store
+
+        @mcp.custom_route(audit_hook.WEBHOOK_PATH, methods=["POST"], include_in_schema=False)
+        async def flagsmith_audit(request: Request) -> JSONResponse:
+            """Flagsmith's audit-log webhook: signed events, stored in `audit_log` only."""
+            return await audit_hook.handle(request, secret, store)
+
     return mcp
 
 
@@ -361,6 +375,7 @@ def server_from_settings(settings: Settings) -> FastMCP:
         settings,
         probes={"database": ledger.ping, "flagsmith": flagsmith_probe},
         controls=Controls.from_settings(settings),
+        audit_store=lambda detail: ledger.audit(FLAGSMITH_AUDIT, None, detail, None),
     )
 
 
