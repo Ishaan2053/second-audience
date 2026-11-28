@@ -339,8 +339,9 @@ def render(
     if shipped is not None:
         lines += [
             f"Sections 1 to 9 use `{results_file}`. The record below is the decision recorded "
-            "at ship from the results it names, and is the one applied; if section 9 differs, "
-            "it is because those results have since been refreshed.",
+            "at ship from the results it names, and is the one applied. Section 9 and the "
+            "sections above it can differ from it because the results have since been "
+            "refreshed, or the ledger or `manual.yaml` has changed.",
             "",
             shipped.rstrip("\n"),
             "",
