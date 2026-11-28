@@ -69,8 +69,10 @@ INSTRUCTIONS = (
     "'observed_pattern' (what the evidence shows), 'hypothesis' (one sentence: the change "
     "and its expected effect on the primary metric you chose, with the direction) and "
     "'rationale' (why this style, which risks the guardrails watch). Cite the session IDs "
-    "your reasoning relies on in 'cited_sessions' and only use IDs from 'sessions'. Use only "
-    "numbers that appear in the evidence; copy them exactly. 'slug' is a new lowercase "
+    "your reasoning relies on in 'cited_sessions' and only use IDs from 'sessions'. The only "
+    "figures you may quote are those in 'outcomes_by_arm_and_kind', "
+    "'corrected_calls_followed', 'best_known_arm' and the sessions' 'tool_calls'; copy them "
+    "exactly. Do not quote times, room IDs, splits or any other number. 'slug' is a new lowercase "
     "experiment name with hyphens, not one listed in 'taken_slugs'. 'variant_key' is a short "
     "snake_case name for the new arm. Plain sentences, no Markdown."
 )
@@ -179,9 +181,11 @@ class Evidence:
         }
 
     def identifiers(self) -> list[str]:
-        """Names that contain digits but are not figures: slugs, arm keys and scenario IDs."""
+        """Names that may contain digits but are not figures: slugs, arm keys, scenario IDs and
+        the sampled sessions' model labels."""
         names = {self.spec.slug, *self.taken_slugs, *(arm.key for arm in self.spec.arms)}
         names |= {s["scenario_id"] for s in self.sessions}
+        names |= {s["model"] for s in self.sessions if s["model"]}
         return sorted(names, key=len, reverse=True)
 
     def pack(self) -> dict[str, Any]:
@@ -401,7 +405,8 @@ def validate(raw: str, evidence: Evidence) -> Draft:
     unknown = sorted(cited - evidence.session_ids)
     if unknown:
         problems.append(f"cited sessions not in the evidence: {unknown}")
-    bad_numbers = unsupported_numbers(_without_identifiers(prose, evidence), evidence.figures())
+    stripped = _without_identifiers(prose, evidence, proposal)
+    bad_numbers = unsupported_numbers(stripped, evidence.figures())
     if bad_numbers:
         problems.append(f"numbers not in the evidence: {bad_numbers}")
     if problems or value is None:
@@ -413,11 +418,18 @@ def validate(raw: str, evidence: Evidence) -> Draft:
     return Draft(proposal, spec)
 
 
-def _without_identifiers(prose: str, evidence: Evidence) -> str:
-    """The prose without session IDs and other names, so their digits are not read as numbers."""
+def _without_identifiers(prose: str, evidence: Evidence, proposal: Proposal) -> str:
+    """The prose without session IDs and other names, so their digits are not read as numbers.
+
+    The proposal's own slug and variant key are names too. Only names with a letter are
+    removed, and only as whole tokens: a digit-only name (a model label "40") would otherwise
+    erase a real figure ("40%", or the "4" in "45"). A sentence's full stop may follow a name.
+    """
     prose = _SESSION_ID.sub(" ", prose)
-    for name in evidence.identifiers():
-        prose = prose.replace(name, " ")
+    names = {n for n in (*evidence.identifiers(), proposal.slug, proposal.variant_key) if n}
+    for name in sorted(names, key=len, reverse=True):
+        if any(char.isalpha() for char in name):
+            prose = re.sub(rf"(?<![\w.-]){re.escape(name)}(?![\w-]|\.\w)", " ", prose)
     return prose
 
 

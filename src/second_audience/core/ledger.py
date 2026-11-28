@@ -550,6 +550,16 @@ class Ledger:
                 )
             )
 
+    def has_audit(self, action: str, experiment_slug: str) -> bool:
+        """Whether the audit log holds at least one `action` row for the experiment."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(audit_log.c.id)
+                .where(audit_log.c.action == action, audit_log.c.experiment_slug == experiment_slug)
+                .limit(1)
+            ).first()
+        return row is not None
+
     def failing_sessions(self, limit: int) -> list[FailingSession]:
         """Return up to `limit` finished, non-correct sessions, newest first, with tool calls."""
         with self._engine.connect() as conn:

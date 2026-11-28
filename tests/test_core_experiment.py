@@ -2,7 +2,9 @@
 
 Unit tests mock the Flagsmith SDK. The `network` test creates a temporary multivariate flag
 in the Development environment with the `flagsmith` CLI (which must be logged in) and
-resolves it through the real SDK with `FLAGSMITH_ENVIRONMENT_KEY` from `.env`.
+resolves it through the real SDK with `FLAGSMITH_ENVIRONMENT_KEY` from `.env`, which must
+therefore be a Development environment key: with a Production key the probes never see the
+temporary flag's variant (it is added in Development only) and the test times out.
 """
 
 import json
@@ -15,6 +17,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from flagsmith import Flagsmith
+from flagsmith.exceptions import FlagsmithFeatureDoesNotExistError
 from flagsmith.models import DefaultFlag, ExperimentMetadata, Flag
 
 from second_audience.config import Settings, get_settings
@@ -232,10 +235,14 @@ def _wait_for_split(flag_name: str, timeout_seconds: float = 60, settled: int = 
     deadline = time.monotonic() + timeout_seconds
     streak = 0
     while time.monotonic() < deadline:
-        flag = sdk.get_identity_flags(f"sa-test-probe-{uuid.uuid4().hex[:8]}").get_flag(flag_name)
-        # A stale edge node serves the flag as STATIC with no variant key; an updated one
-        # gives every identity a key ("control" or "prescriptive"). For a few seconds both
-        # answer, so one good probe is not enough: wait for a run of them.
+        flags = sdk.get_identity_flags(f"sa-test-probe-{uuid.uuid4().hex[:8]}")
+        try:
+            flag = flags.get_flag(flag_name)
+        except FlagsmithFeatureDoesNotExistError:
+            flag = None  # this edge node has not received the new feature yet
+        # A stale edge node serves the flag as STATIC with no variant key, or not at all; an
+        # updated one gives every identity a key ("control" or "prescriptive"). For a few
+        # seconds both answer, so one good probe is not enough: wait for a run of them.
         if isinstance(flag, Flag) and flag.variant is not None:
             streak += 1
             if streak == settled:

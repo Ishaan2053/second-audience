@@ -165,10 +165,10 @@ What the lab snapshot supports (quote the recording-day lab numbers instead):
   `https://second-audience.onrender.com/mcp`, running one task to `finish_task`.
 - **Say:** "The same server is public. Anyone can point their own agent at it; those
   sessions are tagged as field traffic and reported apart from the lab."
-- **Fallback:** if the host is down, run the server locally
-  (`uv run python -m second_audience.booking.server --transport http --port 8000`), state the
-  public URL on screen, and show field rows from the ledger
-  (`uv run python scripts/find_pairs.py --source field` lists the field cells).
+- **Fallback:** if the host is down, state the public URL on screen and show field rows from
+  the ledger instead (`uv run python scripts/find_pairs.py --source field` lists the field
+  cells). Do not start a local server for this shot: the local configuration points at the
+  production experiment, so its sessions would be counted.
 
 ### 6. Ship (15 s)
 

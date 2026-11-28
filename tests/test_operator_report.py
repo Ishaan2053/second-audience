@@ -340,6 +340,15 @@ def test_ship_smoke_sessions_are_left_out(spec: ExperimentSpec, state: RunState)
     assert analysis == run(spec, state, results_json())
 
 
+def test_a_field_client_cannot_hide_as_a_smoke_session(
+    spec: ExperimentSpec, state: RunState
+) -> None:
+    field = record("prescriptive", source="field", model=SMOKE_AGENT_LABEL)
+    analysis = run(spec, state, results_json(), records=[*RECORDS, field])
+    assert field in analysis.records
+    assert any(t.source == "field" and t.model == SMOKE_AGENT_LABEL for t in analysis.traffic)
+
+
 def test_split_health_uses_flagsmith_counts(spec: ExperimentSpec, state: RunState) -> None:
     analysis = run(spec, state, results_json(n=(70, 30)))
     assert analysis.srm is not None

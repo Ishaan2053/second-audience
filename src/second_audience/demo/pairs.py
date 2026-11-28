@@ -2,8 +2,10 @@
 
 The population is what `sa report` analyses: scored sessions (enrolled, finished, not
 abandoned) of one traffic source, started since the experiment's start, without `sa ship`
-smoke runs. A cell is one source, scenario and agent label. Every control session in a cell
-is paired with every challenger session in it, so one session can appear in several pairs.
+smoke runs. Fallback sessions (Flagsmith unreachable at exposure) have no arm, so they are
+never in the population or in its counts. A cell is one source, scenario and agent label.
+Every control session in a cell is paired with every challenger session in it, so one
+session can appear in several pairs.
 Pairs are for choosing a replay; the session-level counts are what a claim should cite.
 """
 
@@ -24,7 +26,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from second_audience.booking.checker import Outcome
 from second_audience.config import get_settings
 from second_audience.core.ledger import Ledger, SessionRecord, Source, make_engine
-from second_audience.operator.analysis import RunState, scored, ship_smoke
+from second_audience.operator.analysis import ABANDONED, RunState, scored, ship_smoke
 from second_audience.operator.spec import CONTROL_KEY
 from second_audience.operator.start import state_path
 
@@ -167,19 +169,16 @@ def _scope(source: str, since: datetime) -> str:
 
 
 def _session_table(exposed: list[SessionRecord], counted: list[SessionRecord], scope: str) -> Table:
-    """Scored sessions per kind and arm: outcomes, mean tool calls, and what was left out."""
+    """Scored sessions per kind and arm: outcomes, mean tool calls, and the abandoned ones."""
     table = Table(title=f"{scope}: scored exposed sessions by kind and arm (cite these counts)")
-    columns = ("kind", "arm", "sessions", "outcomes", "mean tool calls", "not scored")
+    columns = ("kind", "arm", "sessions", "outcomes", "mean tool calls", "abandoned")
     for column in columns:
         table.add_column(column)
     outcomes = session_outcomes(counted)
     groups: dict[tuple[str, str], list[SessionRecord]] = defaultdict(list)
     for r in counted:
         groups[(r.scenario_kind, str(r.variant))].append(r)
-    kept = {r.session_id for r in counted}
-    left_out = Counter(
-        (r.scenario_kind, str(r.variant)) for r in exposed if r.session_id not in kept
-    )
+    left_out = Counter((r.scenario_kind, str(r.variant)) for r in exposed if r.outcome == ABANDONED)
     for kind, arm in sorted(groups.keys() | left_out.keys()):
         group = groups.get((kind, arm), [])
         breakdown = ", ".join(
@@ -245,7 +244,11 @@ def report(console: Console, exposed: list[SessionRecord], source: str, since: d
     console.print(_pair_table(cells, scope))
     console.print(
         "Counts cover scored sessions (enrolled, finished, not abandoned), as `sa report` "
-        "does; 'not scored' counts the exposed sessions left out.\n"
+        "does; 'abandoned' counts the exposed sessions left out for that reason. Fallback "
+        "sessions (no arm) are not counted anywhere.\n"
+        "'correct' here is the session's outcome label; `sa report`'s task_completed scores "
+        "the final state, so the two can differ (for example a budget_exhausted session whose "
+        "final state is correct).\n"
         "Pairs reuse sessions (each control x challenger combination in a cell), so cite the "
         "session counts above, not pair counts, when describing how typical a replay is.\n"
         "Replay a pair with: uv run python scripts/replay.py --sessions <control> <challenger>"

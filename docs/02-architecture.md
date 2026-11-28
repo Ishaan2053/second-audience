@@ -446,9 +446,12 @@ the newest pair from the population below.
 default `lab`) started since the experiment's start (`--slug`, default `error-style-v1`, read
 from `experiments/.state/<slug>.json`). It groups them into cells (source, scenario, agent
 label), lists every control x challenger pair and flags differing outcomes, and prints
-session counts per kind and arm (with the exposed sessions left out as not scored) and pair
+session counts per kind and arm (with the abandoned sessions left out counted separately;
+fallback sessions have no arm and appear nowhere) and pair
 counts per kind, challenger variant, outcome and tool-call pattern, favourable or not, so a
 chosen replay can be described honestly. Every table title names the source and the window.
+Its "correct" is the session's outcome label, which can differ from `sa report`'s
+`task_completed` (scored on the final state), as its footer says.
 The shot list is `docs/demo-script.md`.
 
 ### 3.7 Lab runner (`lab/`)
@@ -570,8 +573,10 @@ drafts the next experiment from the source experiment's ledger sessions since it
   not by the raw flag value); the variant key is not `control` or any source arm key; cited
   IDs, and any session ID in the prose, are in the pack; prose numbers appear among the
   computed figures (outcome and suggestion rows, the best-known-arm reason, sampled
-  sessions' tool-call counts), after session IDs, slugs, arm keys and scenario IDs are
-  removed from the prose, so transcript arguments and IDs are not a source of numbers; the
+  sessions' tool-call counts), after session IDs, slugs (the proposal's own included), arm
+  and variant keys, scenario IDs and the sampled sessions' model labels (for example
+  `gemini-3.5-flash-lite`) are removed from the prose, so transcript arguments and names are
+  not a source of numbers, and the instructions name the only figures that may be quoted; the
   slug is not used by any spec, proposal or state file; the built spec passes `ExperimentSpec`. A
   rejected answer is retried once with the reasons; a second rejection exits 1 and saves both
   raw answers to `experiments/proposals/.failed/` (git-ignored).
@@ -592,39 +597,61 @@ at the stopping point.
 - **Inputs:** the newest saved results file in `reports/<slug>/` (run `sa report` first),
   `manual.yaml` and the ledger, through the same `analyse` as `sa report`, so the report and
   the ship decision cannot differ. It refuses, changing nothing, when the stopping rule is not
-  met (no override), when no results are saved, when the experiment is not `running`, or when
+  met (no override), when no results are saved, when the experiment is neither `running` nor
+  `completed` with the planned rollout (see "Record-only re-run" below), or when
   `SA_SERVER_URL` or `SA_LAB_KEY` is unset (the smoke check needs the server, and must run as
   lab traffic so it is never counted as field traffic).
 - **Plan:** prints the rule, every metric's per-arm numbers and inference, each step of the
   rule, the decision and the exact Flagsmith change. For a guardrail with no inference it
   also prints the per-arm ledger counts and the variant's wrong bookings on trap scenarios
-  (HYPOTHESIS.md section 10). `--dry-run` stops there. Otherwise the
+  (HYPOTHESIS.md section 10). It warns (and the record keeps the warning) when the saved
+  results' `as_of` is older than 6 hours, or is before the hard end while the rule is met only
+  because the hard end has passed. `--dry-run` stops there. Otherwise the
   human types `ship <slug>`; anything else aborts with no change.
 - **Change (API path):** `POST .../experiments/<id>/complete/` with `rollout_decision`
   `variant` and `rollout_variant` (the option ID from the state file) for `ship_variant`, or
   `control` for `keep_control` and `inconclusive`, which leaves the flag value as it is. The
   call is documented in Flagsmith's API and was verified live on Development in SA-02
-  (question 8), so no guided dashboard steps are needed.
+  (question 8), so no guided dashboard steps are needed. If the call fails client-side (the
+  CLI errors), an `audit_log` row with action `ship_attempt` (approver, planned rollout,
+  results file, error) is written before exiting 1, since a failed CLI call does not prove
+  Flagsmith refused the change.
 - **Record first:** as soon as `complete/` succeeds, an `audit_log` row (action `ship`,
   verification `pending`) and a "Decision" record marked "Verification pending" are written,
   so no later failure (a read-back error, the smoke session, Ctrl-C) can leave an ended
-  experiment unrecorded. A re-run would refuse with "already ended".
+  experiment unrecorded.
+- **Record-only re-run:** if the experiment is already `completed` with the `rollout_decision`
+  the plan names (for a variant plan, `rollout_variant` must be present and equal to the
+  option ID; for a control plan it must be absent or null), for example because a
+  `complete/` call succeeded but its answer never reached `sa ship`, a re-run prints "none"
+  as the change, asks for the same typed `ship <slug>`, makes no second `complete/` call, and
+  runs the read-back, smoke session and both records (audit detail `record_only: true`),
+  replacing a pending record an earlier run left in the report. A completed experiment with
+  a different rollout is refused, and so is a re-run once a run has finished verifying (a
+  `ship_verify` audit row for the slug, or a `decision.md` no longer marked pending): only a
+  pending record, a pending `ship` row or nothing (the `ship_attempt` case) lets it proceed.
+  A Ctrl-C during the `complete/` call is audited as a `ship_attempt` before exiting.
 - **Verification:** reads the experiment back (`completed`, matching `rollout_decision`) and
   the environment's default feature state (`GET .../featurestates/?feature=<id>`): enabled,
   and serving the expected arm's value (a variant at 100%, or the default with every variant
-  at 0%). A read-back failure is a recorded problem, not a crash. Only if the read-back shows
+  at 0%; the option may be an ID or a nested object with an `id`). A read-back failure,
+  including a feature state of an unexpected shape, is a recorded problem, not a crash. Only if the read-back shows
   the experiment `completed` does one scripted MCP session run against `SA_SERVER_URL`
-  (scenario `s01`, agent label `sa-ship-smoke`, lab traffic via `SA_LAB_KEY`); it waits 5 s
+  (scenario `s01`, agent label `sa-ship-smoke`, lab traffic via `SA_LAB_KEY`); it waits 6 s
   for edge propagation before every probe, including the first, so it cannot be enrolled in
   the experiment that just ended, and tries up to 6 times. It makes the scenario's first
-  attempt and reads the style off the error payload. Sessions labelled `sa-ship-smoke` are
-  excluded from every analysis (`analysis.ship_smoke`) and from `sa propose` evidence.
+  attempt and reads the style off the error payload. Lab sessions labelled `sa-ship-smoke`
+  are excluded from every analysis (`analysis.ship_smoke`) and from `sa propose` evidence; a
+  field session with that label is counted like any other, so a public client cannot hide.
 - **Record:** a second `audit_log` row (action `ship_verify`: the decision, reasons,
   exposures, inference, guardrail ledger counts when a guardrail has no inference, results
-  file, rollout, read-back values, smoke style and any problems, `approved_by` = git
-  `user.name`), and the dated "Decision" section in `reports/<slug>/decision.md` is rewritten
-  with what was verified, replacing the pending record in `report.md`; later `sa report`
-  runs keep it at the end. Any problem after the change is recorded this way and exits 1.
+  file, rollout, read-back values, smoke style, warnings, `record_only` and any problems;
+  `verification` is `finished`, or `failed` when a problem was noted; `approved_by` = git
+  `user.name`), and the dated "Decision" section in `reports/<slug>/decision.md` ("Decision
+  recorded at ship from results `<file>`") is rewritten with what was verified, replacing the
+  pending record in `report.md`. Later `sa report` runs keep it at the end, after a line
+  saying the body uses the newer results file and the record is the decision applied. Any
+  problem after the change is recorded this way and exits 1.
 
 ### 3.9 Public endpoint
 

@@ -288,6 +288,39 @@ def test_invented_count_is_rejected_even_inside_a_session_id(evidence: Evidence)
     assert validate(answer(**cited, rationale=fine), tweaked).spec.slug == NEW_SLUG
 
 
+def test_model_labels_and_the_proposals_own_names_are_not_numbers(evidence: Evidence) -> None:
+    model = "gemini-3.5-flash-lite"
+    tweaked = replace(evidence, sessions=[{**s, "model": model} for s in evidence.sessions])
+    names = {"slug": "error-style-v7", "variant_key": "note_v3"}
+    prose = f"In {sid(3)}, {model} copied the call; error-style-v7 adds note_v3 to it."
+    assert "3.5" not in json.dumps(tweaked.figures())  # so the label alone would fail
+    assert validate(answer(**names, rationale=prose), tweaked).spec.slug == "error-style-v7"
+    with pytest.raises(ProposalRejectedError, match=r"numbers not in the evidence: \['17'\]"):
+        validate(answer(**names, rationale=f"{prose} {model} gave up 17 times."), tweaked)
+
+
+def test_a_digit_only_model_label_does_not_erase_real_numbers(evidence: Evidence) -> None:
+    tweaked = replace(evidence, sessions=[{**s, "model": "40"} for s in evidence.sessions])
+    assert "40" not in json.dumps(tweaked.figures())
+    with pytest.raises(ProposalRejectedError, match=r"numbers not in the evidence: \['40'\]"):
+        validate(answer(rationale="Wrong bookings rose 40% in the trap sessions."), tweaked)
+
+
+def test_a_digit_only_label_is_not_stripped_from_inside_a_number(evidence: Evidence) -> None:
+    tweaked = replace(evidence, sessions=[{**s, "model": "3"} for s in evidence.sessions])
+    assert "35" not in json.dumps(tweaked.figures())
+    with pytest.raises(ProposalRejectedError, match=r"numbers not in the evidence: \['35'\]"):
+        validate(answer(rationale="Agents gave up 35 times."), tweaked)
+
+
+def test_a_name_is_stripped_only_as_a_whole_token(evidence: Evidence) -> None:
+    names = {"slug": "error-style-v7", "variant_key": "note_v3"}
+    fine = "error-style-v7 adds note_v3. The note_v3 arm is new."
+    assert validate(answer(**names, rationale=fine), evidence).spec.slug == "error-style-v7"
+    with pytest.raises(ProposalRejectedError, match="numbers not in the evidence"):
+        validate(answer(**names, rationale="It is like error-style-v71 before it."), evidence)
+
+
 def test_transcript_arguments_are_not_a_source_of_numbers(evidence: Evidence) -> None:
     # 18 occurs only in the transcripts' arguments (date 2027-03-18), never in a figure.
     assert "18" in json.dumps(evidence.pack())
